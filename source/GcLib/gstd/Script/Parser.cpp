@@ -458,55 +458,43 @@ parser::arg_data parser::parse_variable_decl(parser_state_t* state, bool bParame
 	return var;
 }
 void parser::parse_type_decl(parser_state_t* state, arg_data* pArg) {
-	token_kind typeBaseTok = token_kind::tk_decl_auto;
+	token_kind typeBaseTok = token_kind::tk_invalid;
 	size_t arrayCount = 0;
-	bool bSpecifiedType = false;
 
-	while (IsDeclToken(state->next())) {
-		if (state->next() == token_kind::tk_decl_mod_const) {
-			pArg->bConst = true;
+	if (state->next() == token_kind::tk_decl_mod_const) {
+		pArg->bConst = true;
 
+		state->advance();
+	}
+
+	parser_assert(state, IsDeclToken(state->next()), "Missing type specifier");
+
+	typeBaseTok = state->next();
+
+	state->advance();
+
+	if (state->next() == token_kind::tk_open_bra) {
+		while (state->next() == token_kind::tk_open_bra) {
 			state->advance();
-		}
-		else if (!bSpecifiedType) {
-			bSpecifiedType = true;
-			typeBaseTok = state->next();
-
+			parser_assert(state, state->next() == token_kind::tk_close_bra,
+				"\"]\" is required.\r\n");
 			state->advance();
-
-			if (state->next() == token_kind::tk_open_bra) {
-				parser_assert(state, typeBaseTok != token_kind::tk_decl_auto,
-					"An array type declaration cannot be typeless.\r\n");
-				while (state->next() == token_kind::tk_open_bra) {
-					state->advance();
-					parser_assert(state, state->next() == token_kind::tk_close_bra,
-						"\"]\" is required.\r\n");
-					state->advance();
-					++arrayCount;
-				}
-			}
-		}
-		else {
-			parser_assert(state, false, "Type already specified.\r\n");
+			++arrayCount;
 		}
 	}
 
-	if (typeBaseTok == token_kind::tk_decl_auto)
-		pArg->type = nullptr;
+	type_data* typeBase = _token_kind_to_type_data(typeBaseTok);
+	if (arrayCount == 0) {
+		pArg->type = typeBase;
+	}
 	else {
-		type_data* typeBase = _token_kind_to_type_data(typeBaseTok);
-		if (arrayCount == 0) {
-			pArg->type = typeBase;
-		}
-		else {
-			script_type_manager* typeManager = script_type_manager::get_instance();
+		script_type_manager* typeManager = script_type_manager::get_instance();
 
-			pArg->type = typeManager->get_array_type(typeBase);
+		pArg->type = typeManager->get_array_type(typeBase);
 
-			if (arrayCount > 1) {
-				for (size_t i = 1; i < arrayCount; ++i)
-					pArg->type = typeManager->get_array_type(pArg->type);
-			}
+		if (arrayCount > 1) {
+			for (size_t i = 1; i < arrayCount; ++i)
+				pArg->type = typeManager->get_array_type(pArg->type);
 		}
 	}
 }
@@ -590,6 +578,10 @@ int parser::scan_current_scope(parser_state_t* state, int level, int initVar, co
 						lex2.advance();
 
 						funcReturnType = tmp.type;
+					}
+					else {
+						parser_assert(kind != block_kind::bk_function,
+							"Missing return type.\r\n");
 					}
 
 					std::string name = lex2.word;
@@ -684,7 +676,6 @@ int parser::scan_current_scope(parser_state_t* state, int level, int initVar, co
 			case token_kind::tk_decl_char:
 			case token_kind::tk_decl_bool:
 			case token_kind::tk_decl_string:
-			case token_kind::tk_decl_auto:
 			{
 				if (cur == 0 && par == 0) {
 					parser_state_t dummyState = parser_state_t(&lex2);
@@ -1449,7 +1440,6 @@ void parser::parse_single_statement(script_block* block, parser_state_t* state,
 	case token_kind::tk_decl_char:
 	case token_kind::tk_decl_bool:
 	case token_kind::tk_decl_string:
-	case token_kind::tk_decl_auto:
 	case token_kind::tk_decl_mod_const:
 	{
 		while (state->next() != token_kind::tk_word) state->advance();

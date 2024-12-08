@@ -485,8 +485,6 @@ void script_scanner::advance() {
 }
 
 std::unordered_map<std::string, token_kind> script_scanner::token_map = {
-	{ "let", token_kind::tk_decl_auto },
-	{ "var", token_kind::tk_decl_auto },
 	{ "void", token_kind::tk_decl_void },
 	{ "float", token_kind::tk_decl_float },
 	{ "int", token_kind::tk_decl_int },

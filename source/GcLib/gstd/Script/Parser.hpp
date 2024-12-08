@@ -377,14 +377,12 @@ namespace gstd {
 	}
 	bool parser::IsDeclToken(token_kind tk) {
 		switch (tk) {
-		case token_kind::tk_decl_auto:
 		case token_kind::tk_decl_void:
 		case token_kind::tk_decl_float:
 		case token_kind::tk_decl_int:
 		case token_kind::tk_decl_char:
 		case token_kind::tk_decl_bool:
 		case token_kind::tk_decl_string:
-		case token_kind::tk_decl_mod_const:
 			return true;
 		}
 		return false;
