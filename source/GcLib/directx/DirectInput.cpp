@@ -49,7 +49,7 @@ void DirectInput::_WrapDXErr(HRESULT hr, const std::string& routine, const std::
 	if (SUCCEEDED(hr)) return;
 	std::string err = StringUtility::Format("DirectInput::%s: %s. [%s]\r\n  %s",
 		routine.c_str(), msg.c_str(), DXGetErrorStringA(hr), DXGetErrorDescriptionA(hr));
-	Logger::WriteTop(err);
+	Logger::WriteError(err);
 	if (bThrow) throw wexception(err);
 }
 
@@ -90,7 +90,7 @@ HRESULT DirectInput::InputDeviceHeader::QueryHidPath() {
 	if (pDevice == nullptr)
 		return E_FAIL;
 
-	DIPROPGUIDANDPATH dip;
+	DIPROPGUIDANDPATH dip{};
 	dip.diph.dwSize = sizeof(dip);
 	dip.diph.dwHeaderSize = sizeof(DIPROPHEADER);
 	dip.diph.dwObj = 0;
@@ -107,7 +107,7 @@ HRESULT DirectInput::InputDeviceHeader::QueryVidPid() {
 	if (pDevice == nullptr)
 		return E_FAIL;
 
-	DIPROPDWORD dip;
+	DIPROPDWORD dip{};
 	dip.diph.dwSize = sizeof(dip);
 	dip.diph.dwHeaderSize = sizeof(DIPROPHEADER);
 	dip.diph.dwObj = 0;
@@ -198,7 +198,7 @@ bool DirectInput::_InitializeJoypad() {
 
 	size_t count = listDeviceJoypad_.size();
 	if (count == 0U)
-		Logger::WriteTop("DirectInput:_InitializeJoypad: No pad device detected.");
+		Logger::WriteWarn("DirectInput:_InitializeJoypad: No pad device detected.");
 
 	Logger::WriteTop("DirectInput: Pad device initialized.");
 	return true;
@@ -239,7 +239,7 @@ BOOL DirectInput::_GetJoypadCallback(LPDIDEVICEINSTANCE lpddi) {
 
 		{
 			{
-				DIPROPRANGE diprg;
+				DIPROPRANGE diprg{};
 				diprg.diph.dwSize = sizeof(DIPROPRANGE);
 				diprg.diph.dwHeaderSize = sizeof(DIPROPHEADER);
 				diprg.diph.dwObj = 0;
@@ -252,7 +252,7 @@ BOOL DirectInput::_GetJoypadCallback(LPDIDEVICEINSTANCE lpddi) {
 			}
 
 			{
-				DIPROPDWORD dipdw;
+				DIPROPDWORD dipdw{};
 				dipdw.diph.dwSize = sizeof(DIPROPDWORD);
 				dipdw.diph.dwHeaderSize = sizeof(DIPROPHEADER);
 				dipdw.diph.dwObj = 0;
@@ -280,7 +280,7 @@ BOOL DirectInput::_GetJoypadCallback(LPDIDEVICEINSTANCE lpddi) {
 	}
 	catch (wexception& err) {
 		ptr_release(device);
-		Logger::WriteTop("DirectInput::_GetJoypadCallback: Connection attempt failed.");
+		Logger::WriteError("DirectInput::_GetJoypadCallback: Connection attempt failed.");
 	}
 
 #undef CHECKERR
@@ -514,15 +514,15 @@ VirtualKeyManager::~VirtualKeyManager() {
 
 void VirtualKeyManager::Update() {
 	DirectInput::Update();
-	for (auto itr = mapKey_.begin(); itr != mapKey_.end(); ++itr) {
-		DIKeyState state = _GetVirtualKeyState(itr->first);
-		itr->second->SetKeyState(state);
+	for (auto& [id, vk] : mapKey_) {
+		DIKeyState state = _GetVirtualKeyState(id);
+		vk->SetKeyState(state);
 	}
 }
 void VirtualKeyManager::ClearKeyState() {
 	DirectInput::ResetInputState();
-	for (auto itr = mapKey_.begin(); itr != mapKey_.end(); ++itr) {
-		itr->second->SetKeyState(KEY_FREE);
+	for (auto& [id, vk] : mapKey_) {
+		vk->SetKeyState(KEY_FREE);
 	}
 }
 DIKeyState VirtualKeyManager::_GetVirtualKeyState(int16_t id) {
@@ -555,16 +555,12 @@ ref_count_ptr<VirtualKey> VirtualKeyManager::GetVirtualKey(int16_t id) {
 	if (itrFind == mapKey_.end()) return nullptr;
 	return itrFind->second;
 }
-bool VirtualKeyManager::IsTargetKeyCode(int16_t key) {
-	bool res = false;
-	for (auto itr = mapKey_.begin(); itr != mapKey_.end(); ++itr) {
-		ref_count_ptr<VirtualKey> vKey = itr->second;
-		if (key == vKey->GetKeyCode()) {
-			res = true;
-			break;
-		}
+bool VirtualKeyManager::IsTargetKeyCode(int16_t keyCode) {
+	for (auto& [_, key] : mapKey_) {
+		if (keyCode == key->GetKeyCode())
+			return true;
 	}
-	return res;
+	return false;
 }
 
 #if defined(DNH_PROJ_EXECUTOR)
@@ -576,81 +572,115 @@ KeyReplayManager::KeyReplayManager(VirtualKeyManager* input) {
 	input_ = input;
 	state_ = STATE_RECORD;
 }
-KeyReplayManager::~KeyReplayManager() {}
+
+void KeyReplayManager::_AddData(ReplayData&& data) {
+	auto itrFind = mapReplayData_.find(data.frame);
+	if (itrFind != mapReplayData_.end()) {
+		itrFind->second.push_back(MOVE(data));
+	}
+	else {
+		std::vector<ReplayData> listData;
+		listData.push_back(MOVE(data));
+
+		mapReplayData_.insert({ data.frame, listData });
+	}
+}
+
 void KeyReplayManager::AddTarget(int16_t key) {
 	mapKeyTarget_[key] = KEY_FREE;
 }
+
 void KeyReplayManager::Update() {
 	if (state_ == STATE_RECORD) {
-		for (auto itrTarget = mapKeyTarget_.begin(); itrTarget != mapKeyTarget_.end(); ++itrTarget) {
-			int16_t idKey = itrTarget->first;
-			DIKeyState keyState = input_->GetVirtualKeyState(idKey);
-			
-			if (frame_ == 0 || itrTarget->second != keyState) {
-				ReplayData data;
-				data.id_ = idKey;
-				data.frame_ = frame_;
-				data.state_ = keyState;
-				listReplayData_.push_back(data);
-			}
+		if (frame_ == 0) {
+			// In the first frame, store initial states of all keys
 
-			itrTarget->second = keyState;
+			for (auto& [idKey, state] : mapKeyTarget_) {
+				// Read actual state
+				state = input_->GetVirtualKeyState(idKey);
+
+				ReplayData data = {
+					idKey, frame_, state
+				};
+				_AddData(MOVE(data));
+			}
+		}
+		else {
+			// Record state changes
+
+			for (auto& [idKey, oldState] : mapKeyTarget_) {
+				DIKeyState currentState = input_->GetVirtualKeyState(idKey);
+
+				if (currentState != oldState) {
+					ReplayData data = {
+						idKey, frame_, currentState
+					};
+					_AddData(MOVE(data));
+
+					oldState = currentState;
+				}
+			}
 		}
 	}
 	else if (state_ == STATE_REPLAY) {
-		if (frame_ == 0) replayDataIterator_ = listReplayData_.begin();
-		for (auto itrTarget = mapKeyTarget_.begin(); itrTarget != mapKeyTarget_.end(); ++itrTarget) {
-			int16_t idKey = itrTarget->first;
-			DIKeyState& stateKey = itrTarget->second;
+		// Load state changes for the current frame (if one exists)
+		auto itrCurrentFrame = mapReplayData_.find(frame_);
+		if (itrCurrentFrame != mapReplayData_.end()) {
+			auto& [_, listData] = *itrCurrentFrame;
 
-			for (auto itrData = replayDataIterator_; itrData != listReplayData_.end(); ++itrData) {
-				ReplayData& data = *itrData;
-				if (data.frame_ > frame_) break;
-
-				if (idKey == data.id_ && data.frame_ == frame_) {
-					stateKey = data.state_;
-					++replayDataIterator_;
-				}
+			for (auto& keyData : listData) {
+				mapKeyTarget_[keyData.id] = keyData.state;
 			}
 
-			ref_count_ptr<VirtualKey> key = input_->GetVirtualKey(idKey);
-			key->SetKeyState(stateKey);
+			//mapReplayData_.erase(itrCurrentFrame);
 		}
 
-		if (frame_ % 600 == 0)
-			listReplayData_.erase(listReplayData_.begin(), replayDataIterator_);
+		// Apply the current replay key state (overwriting existing realtime key data)
+		for (auto& [idKey, state] : mapKeyTarget_) {
+			auto vk = input_->GetVirtualKey(idKey);
+			vk->SetKeyState(state);
+		}
 	}
+
 	++frame_;
 }
-bool KeyReplayManager::IsTargetKeyCode(int16_t key) {
-	bool res = false;
-	for (auto itrTarget = mapKeyTarget_.begin(); itrTarget != mapKeyTarget_.end(); ++itrTarget) {
-		ref_count_ptr<VirtualKey> vKey = input_->GetVirtualKey(itrTarget->first);
-		if (key == vKey->GetKeyCode()) {
-			res = true;
-			break;
-		}
-	}
-	return res;
-}
-void KeyReplayManager::ReadRecord(RecordBuffer& record) {
-	size_t countReplayData = record.GetRecordAs<uint32_t>("count");
 
-	ByteBuffer buffer;
-	buffer.SetSize(sizeof(ReplayData) * countReplayData);
-	record.GetRecord("data", buffer.GetPointer(), buffer.GetSize());
-	for (size_t iRec = 0; iRec < countReplayData; ++iRec) {
-		ReplayData data;
-		buffer.Read(&data, sizeof(ReplayData));
-		listReplayData_.push_back(data);
+bool KeyReplayManager::IsTargetKeyCode(int16_t key) {
+	for (auto& [idKey, state] : mapKeyTarget_) {
+		ref_count_ptr<VirtualKey> vKey = input_->GetVirtualKey(idKey);
+		if (key == vKey->GetKeyCode())
+			return true;
+	}
+	return false;
+}
+
+void KeyReplayManager::ReadRecord(RecordBuffer& record) {
+	if (auto data = record.GetRecordAs<uint32_t>("count")) {
+		auto countReplayData = *data;
+
+		ByteBuffer buffer(sizeof(ReplayData) * countReplayData);
+
+		record.GetRecord("data", buffer.GetPointer(), buffer.GetSize());
+
+		for (size_t iRec = 0; iRec < countReplayData; ++iRec) {
+			ReplayData data{};
+			buffer.Read(&data, sizeof(ReplayData));
+
+			_AddData(MOVE(data));
+		}
 	}
 }
 void KeyReplayManager::WriteRecord(RecordBuffer& record) {
-	record.SetRecord<uint32_t>("count", listReplayData_.size());
+	// Flatten frames data from map
+	std::vector<ReplayData> listDataFlatten;
+	for (auto& [_, listData] : mapReplayData_) {
+		listDataFlatten.insert(listDataFlatten.end(), listData.begin(), listData.end());
+	};
+
+	record.SetRecord<uint32_t>("count", listDataFlatten.size());
 
 	ByteBuffer buffer;
-	for (auto itrData = listReplayData_.begin(); itrData != listReplayData_.end(); ++itrData) {
-		ReplayData& data = *itrData;
+	for (auto& data : listDataFlatten) {
 		buffer.Write(&data, sizeof(ReplayData));
 	}
 	record.SetRecord("data", buffer.GetPointer(), buffer.GetSize());

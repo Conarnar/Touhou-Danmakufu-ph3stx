@@ -7,6 +7,8 @@
 
 #include "GstdConstant.hpp"
 
+#include "CpuInformation.hpp"
+
 namespace gstd {
 	//================================================================
 	//DebugUtility
@@ -23,8 +25,14 @@ namespace gstd {
 	//================================================================
 	//SystemUtility
 	class SystemUtility {
+		static const CpuInformation _cpuInfo;
 	public:
+		static void InitializeCOM();
+		static void UninitializeCOM();
+
 		static void TestCpuSupportSIMD();
+
+		static const CpuInformation& GetCpuInfo() { return _cpuInfo; }
 
 		static stdch::steady_clock::time_point GetCpuTime() {
 			return stdch::steady_clock::now();
@@ -49,21 +57,28 @@ namespace gstd {
 	static void ParallelFor(size_t countLoop, F&& func) {
 		size_t countCore = std::max(std::thread::hardware_concurrency(), 1U);
 
-		std::vector<std::future<void>> workers;
-		workers.reserve(countCore);
+		if (countCore > 1 && countLoop >= countCore * 64) {
+			std::vector<std::future<void>> workers;
+			workers.reserve(countCore);
 
-		auto coreTask = [&](size_t id) {
-			const size_t begin = countLoop / countCore * id + std::min(countLoop % countCore, id);
-			const size_t end = countLoop / countCore * (id + 1U) + std::min(countLoop % countCore, id + 1U);
+			auto coreTask = [&](size_t id) {
+				const size_t begin = countLoop / countCore * id + std::min(countLoop % countCore, id);
+				const size_t end = countLoop / countCore * (id + 1U) + std::min(countLoop % countCore, id + 1U);
 
-			for (size_t i = begin; i < end; ++i)
+				for (size_t i = begin; i < end; ++i)
+					func(i);
+			};
+
+			for (size_t iCore = 0; iCore < countCore; ++iCore)
+				workers.emplace_back(std::async(std::launch::async | std::launch::deferred, coreTask, iCore));
+			for (const auto& worker : workers)
+				worker.wait();
+		}
+		else {
+			for (size_t i = 0; i < countLoop; ++i) {
 				func(i);
-		};
-
-		for (size_t iCore = 0; iCore < countCore; ++iCore)
-			workers.emplace_back(std::async(std::launch::async | std::launch::deferred, coreTask, iCore));
-		for (const auto& worker : workers)
-			worker.wait();
+			}
+		}
 	}
 
 	//================================================================
@@ -81,10 +96,6 @@ namespace gstd {
 		}
 		static inline uint64_t ExtractRevision(uint64_t target) {
 			return target & 0xff;
-		}
-		//Should ensure compatibility if reserved, major, and submajor match target's
-		static inline const bool IsDataBackwardsCompatible(uint64_t target, uint64_t version) {
-			return (version >> 24) == (target >> 24);
 		}
 	};
 
@@ -165,6 +176,11 @@ namespace gstd {
 
 #define BASIC_STR_TEMPL template<class E, class T = std::char_traits<E>, class A = std::allocator<E>>
 
+#define STR_WIDE gstd::StringUtility::ConvertMultiToWide
+#define STR_MULTI gstd::StringUtility::ConvertWideToMulti
+#define STR_FMT gstd::StringUtility::Format
+#define STR_FMT_W gstd::StringUtility::FormatToWide
+
 	//================================================================
 	//StringUtility
 	class StringUtility {
@@ -213,6 +229,7 @@ namespace gstd {
 		static std::string Join(const std::vector<std::string>& strs, const std::string& join);
 
 		static std::string FromGuid(const GUID* guid);
+		static std::string FromAddress(const uintptr_t addr);
 
 		//----------------------------------------------------------------
 
@@ -614,6 +631,7 @@ namespace gstd {
 		}
 	public:
 		virtual ~Singleton() {};
+
 		static T* CreateInstance() {
 			T*& p = _This();
 			if (p == nullptr) p = new T();
@@ -789,7 +807,7 @@ namespace gstd {
 		};
 
 	protected:
-		gstd::ref_count_ptr<Scanner> scan_;
+		Scanner scan_;
 
 		void _RaiseError(const std::wstring& message) {
 			throw gstd::wexception(message);
@@ -823,8 +841,8 @@ namespace gstd {
 		Font();
 		virtual ~Font();
 
-		void CreateFont(const wchar_t* type, int size, bool bBold = false, bool bItalic = false, bool bLine = false);
-		void CreateFontIndirect(LOGFONT& fontInfo);
+		void FCreateFont(const wchar_t* type, int size, bool bBold = false, bool bItalic = false, bool bLine = false);
+		void FCreateFontIndirect(LOGFONT& fontInfo);
 		void Clear();
 
 		HFONT GetHandle() const { return hFont_; }

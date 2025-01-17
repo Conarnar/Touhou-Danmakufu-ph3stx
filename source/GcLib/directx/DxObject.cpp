@@ -164,7 +164,7 @@ void DxScriptPrimitiveObject::SetAngleZ(float z) {
 //****************************************************************************
 DxScriptPrimitiveObject2D::DxScriptPrimitiveObject2D() {
 	typeObject_ = TypeObject::Primitive2D;
-	objRender_ = std::make_shared<RenderObjectTLX>();
+	objRender_ = make_shared<RenderObjectTLX>();
 	objRender_->SetDxObjectReference(this);
 
 	bZWrite_ = false;
@@ -264,7 +264,7 @@ void DxScriptPrimitiveObject2D::SetPermitCamera(bool bPermit) {
 //****************************************************************************
 DxScriptSpriteObject2D::DxScriptSpriteObject2D() {
 	typeObject_ = TypeObject::Sprite2D;
-	objRender_ = std::make_shared<Sprite2D>();
+	objRender_ = make_shared<Sprite2D>();
 	objRender_->SetDxObjectReference(this);
 }
 
@@ -273,7 +273,7 @@ DxScriptSpriteObject2D::DxScriptSpriteObject2D() {
 //****************************************************************************
 DxScriptSpriteListObject2D::DxScriptSpriteListObject2D() {
 	typeObject_ = TypeObject::SpriteList2D;
-	objRender_ = std::make_shared<SpriteList2D>();
+	objRender_ = make_shared<SpriteList2D>();
 	objRender_->SetDxObjectReference(this);
 }
 
@@ -322,7 +322,7 @@ void DxScriptSpriteListObject2D::CloseVertex() {
 //****************************************************************************
 DxScriptPrimitiveObject3D::DxScriptPrimitiveObject3D() {
 	typeObject_ = TypeObject::Primitive3D;
-	objRender_ = std::make_shared<RenderObjectLX>();
+	objRender_ = make_shared<RenderObjectLX>();
 	objRender_->SetDxObjectReference(this);
 	bZWrite_ = false;
 	bZTest_ = true;
@@ -348,7 +348,7 @@ void DxScriptPrimitiveObject3D::SetRenderState() {
 		int frameAnime = objMesh->GetAnimeFrame();
 		const std::wstring& nameAnime = objMesh->GetAnimeName();
 		shared_ptr<DxMesh> mesh = objMesh->GetMesh();
-		shared_ptr<D3DXMATRIX> mat = std::make_shared<D3DXMATRIX>();
+		shared_ptr<D3DXMATRIX> mat = make_shared<D3DXMATRIX>();
 		*mat = mesh->GetAnimationMatrix(nameAnime, frameAnime);
 		objRender_->SetRelativeMatrix(mat);
 	}
@@ -430,7 +430,7 @@ D3DXVECTOR3 DxScriptPrimitiveObject3D::GetVertexPosition(size_t index) {
 //****************************************************************************
 DxScriptSpriteObject3D::DxScriptSpriteObject3D() {
 	typeObject_ = TypeObject::Sprite3D;
-	objRender_ = std::make_shared<Sprite3D>();
+	objRender_ = make_shared<Sprite3D>();
 	objRender_->SetDxObjectReference(this);
 }
 
@@ -439,7 +439,7 @@ DxScriptSpriteObject3D::DxScriptSpriteObject3D() {
 //****************************************************************************
 DxScriptTrajectoryObject3D::DxScriptTrajectoryObject3D() {
 	typeObject_ = TypeObject::Trajectory3D;
-	objRender_ = std::make_shared<TrajectoryObject3D>();
+	objRender_ = make_shared<TrajectoryObject3D>();
 	color_ = 0xffffffff;
 }
 
@@ -494,7 +494,7 @@ void DxScriptTrajectoryObject3D::SetColor(int r, int g, int b) {
 //****************************************************************************
 DxScriptParticleListObject2D::DxScriptParticleListObject2D() {
 	typeObject_ = TypeObject::ParticleList2D;
-	objRender_ = std::make_shared<ParticleRenderer2D>();
+	objRender_ = make_shared<ParticleRenderer2D>();
 	objRender_->SetDxObjectReference(this);
 }
 
@@ -536,7 +536,7 @@ void DxScriptParticleListObject2D::CleanUp() {
 //****************************************************************************
 DxScriptParticleListObject3D::DxScriptParticleListObject3D() {
 	typeObject_ = TypeObject::ParticleList3D;
-	objRender_ = std::make_shared<ParticleRenderer3D>();
+	objRender_ = make_shared<ParticleRenderer3D>();
 	objRender_->SetDxObjectReference(this);
 }
 
@@ -704,7 +704,7 @@ void DxScriptTextObject::Clone(DxScriptObjectBase* _src) {
 
 	text_.Copy(src->text_);
 
-	textInfo_ = nullptr;
+	textInfo_ = {};
 	objRender_ = nullptr;
 	_UpdateRenderer();
 
@@ -750,7 +750,7 @@ void DxScriptTextObject::SetRenderState() {
 }
 void DxScriptTextObject::_UpdateRenderer() {
 	if (change_ & CHANGE_INFO)
-		textInfo_ = text_.GetTextInfo();
+		textInfo_ = text_.CreateTextInfo();
 	if (change_ & CHANGE_RENDERER)
 		objRender_ = text_.CreateRenderObject(textInfo_);
 	change_ = 0;
@@ -784,13 +784,17 @@ void DxScriptTextObject::SetText(const std::wstring& text) {
 }
 std::vector<size_t> DxScriptTextObject::GetTextCountCU() {
 	_UpdateRenderer();
-	size_t lineCount = textInfo_->GetLineCount();
+
+	size_t lineCount = textInfo_.GetLineCount();
 	std::vector<size_t> listCount;
+
 	for (size_t iLine = 0; iLine < lineCount; ++iLine) {
-		shared_ptr<DxTextLine> textLine = textInfo_->GetTextLine(iLine);
-		size_t count = textLine->GetTextCodeCount();
+		const DxTextLine& textLine = textInfo_.GetTextLine(iLine);
+
+		size_t count = textLine.GetTextCodeCount();
 		listCount.push_back(count);
 	}
+
 	return listCount;
 }
 
@@ -809,17 +813,17 @@ void DxScriptTextObject::SetColor(int r, int g, int b) {
 
 LONG DxScriptTextObject::GetTotalWidth() {
 	if (change_ & CHANGE_INFO) {
-		textInfo_ = text_.GetTextInfo();
+		textInfo_ = text_.CreateTextInfo();
 		change_ &= (~CHANGE_INFO);
 	}
-	return textInfo_->GetTotalWidth();
+	return textInfo_.GetTotalWidth();
 }
 LONG DxScriptTextObject::GetTotalHeight() {
 	if (change_ & CHANGE_INFO) {
-		textInfo_ = text_.GetTextInfo();
+		textInfo_ = text_.CreateTextInfo();
 		change_ &= (~CHANGE_INFO);
 	}
-	return textInfo_->GetTotalHeight();
+	return textInfo_.GetTotalHeight();
 }
 
 void DxScriptTextObject::SetShader(shared_ptr<Shader> shader) {
@@ -1341,7 +1345,6 @@ DxBinaryFileObject::DxBinaryFileObject() {
 	codePage_ = CP_ACP;
 }
 DxBinaryFileObject::~DxBinaryFileObject() {
-	ptr_delete(buffer_);
 }
 
 void DxBinaryFileObject::Clone(DxScriptObjectBase* _src) {
@@ -1352,8 +1355,7 @@ void DxBinaryFileObject::Clone(DxScriptObjectBase* _src) {
 	byteOrder_ = src->byteOrder_;
 	codePage_ = src->codePage_;
 
-	ptr_delete(buffer_);
-	buffer_ = new ByteBuffer(*src->buffer_);
+	buffer_ = ByteBuffer(src->buffer_);
 
 	lastRead_ = src->lastRead_;
 }
@@ -1363,10 +1365,9 @@ bool DxBinaryFileObject::OpenR(const std::wstring& path) {
 	if (!res) return false;
 
 	size_t size = file_->GetSize();
-	buffer_ = new ByteBuffer();
-	buffer_->SetSize(size);
 
-	file_->Read(buffer_->GetPointer(), size);
+	buffer_ = ByteBuffer(size);
+	file_->Read(buffer_.GetPointer(), size);
 
 	return true;
 }
@@ -1376,8 +1377,8 @@ bool DxBinaryFileObject::OpenR(shared_ptr<gstd::FileReader> reader) {
 	auto srcBuffer = dynamic_cast<ManagedFileReader*>(reader.get())->GetBuffer();
 
 	size_t size = reader->GetFileSize();
-	buffer_ = new ByteBuffer();
-	buffer_->Copy(*srcBuffer);
+
+	buffer_ = ByteBuffer(*srcBuffer);
 	
 	return true;
 }
@@ -1386,10 +1387,9 @@ bool DxBinaryFileObject::OpenRW(const std::wstring& path) {
 	if (!res) return false;
 
 	size_t size = file_->GetSize();
-	buffer_ = new ByteBuffer();
-	buffer_->SetSize(size);
 
-	file_->Read(buffer_->GetPointer(), size);
+	buffer_ = ByteBuffer(size);
+	file_->Read(buffer_.GetPointer(), size);
 
 	return true;
 }
@@ -1397,28 +1397,27 @@ bool DxBinaryFileObject::Store() {
 	if (!bWritable_ || file_ == nullptr) return false;
 
 	file_->SetFilePointerBegin(File::WRITE);
-	file_->Write(buffer_->GetPointer(), buffer_->GetSize());
+	file_->Write(buffer_.GetPointer(), buffer_.GetSize());
 
 	return true;
 }
 
 bool DxBinaryFileObject::IsReadableSize(size_t size) {
-	size_t pos = buffer_->GetOffset();
-	bool res = pos + size <= buffer_->GetSize();
+	size_t pos = buffer_.GetOffset();
+	bool res = pos + size <= buffer_.GetSize();
 	return res;
 }
 DWORD DxBinaryFileObject::Read(LPVOID data, size_t size) {
-	if (buffer_ == nullptr || data == nullptr || size == 0) {
+	if (data == nullptr || size == 0) {
 		lastRead_ = 0;
 	}
 	else {
-		lastRead_ = buffer_->Read(data, size);
+		lastRead_ = buffer_.Read(data, size);
 	}
 	return lastRead_;
 }
 DWORD DxBinaryFileObject::Write(LPVOID data, size_t size) {
-	if (buffer_ == nullptr) return 0;
-	return buffer_->Write(data, size);
+	return buffer_.Write(data, size);
 }
 
 //****************************************************************************

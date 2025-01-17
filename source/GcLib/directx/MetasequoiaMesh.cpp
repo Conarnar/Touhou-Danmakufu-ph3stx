@@ -113,8 +113,10 @@ void MetasequoiaMeshData::_ReadMaterial(gstd::Scanner& scanner) {
 
 			std::wstring wPathTexture = tok.GetString();
 			std::wstring path = PathProperty::GetFileDirectory(path_) + wPathTexture;
-			mat->texture_ = std::make_shared<Texture>();
+
+			mat->texture_ = make_shared<Texture>();
 			mat->texture_->CreateFromFile(PathProperty::GetUnique(path), false, false);
+
 			scanner.CheckType(scanner.Next(), Token::Type::TK_CLOSEP);
 		}
 	}
@@ -469,7 +471,7 @@ bool MetasequoiaMesh::CreateFromFileReader(shared_ptr<gstd::FileReader> reader) 
 		data_ = _GetFromManager(name);
 		if (data_ == nullptr) {
 			if (!reader->Open()) throw gstd::wexception("MetasequoiaMesh: Cannot open file for reading.");
-			data_ = std::make_shared<MetasequoiaMeshData>();
+			data_ = make_shared<MetasequoiaMeshData>();
 			data_->SetName(name);
 			MetasequoiaMeshData* data = (MetasequoiaMeshData*)data_.get();
 			res = data->CreateFromFileReader(reader);
@@ -510,7 +512,7 @@ void MetasequoiaMesh::Render(const D3DXVECTOR2& angX, const D3DXVECTOR2& angY, c
 	{
 		DirectGraphics* graphics = DirectGraphics::GetBase();
 		IDirect3DDevice9* device = graphics->GetDevice();
-		ref_count_ptr<DxCamera> camera = graphics->GetCamera();
+		auto& camera = graphics->GetCamera();
 
 		DWORD bFogEnable = FALSE;
 		if (bCoordinate2D_) {

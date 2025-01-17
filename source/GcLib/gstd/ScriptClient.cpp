@@ -11,6 +11,7 @@ using namespace gstd;
 //****************************************************************************
 ScriptEngineData::ScriptEngineData() {
 	encoding_ = Encoding::UNKNOWN;
+	refCount_ = 0;
 }
 ScriptEngineData::~ScriptEngineData() {}
 void ScriptEngineData::SetSource(std::vector<char>& source) {
@@ -27,18 +28,21 @@ ScriptEngineCache::ScriptEngineCache() {
 void ScriptEngineCache::Clear() {
 	cache_.clear();
 }
-void ScriptEngineCache::AddCache(const std::wstring& name, shared_ptr<ScriptEngineData> data) {
-	cache_[name] = data;
+ScriptEngineData* ScriptEngineCache::AddCache(const std::wstring& name, uptr<ScriptEngineData>&& data) {
+	auto& res = (cache_[name] = MOVE(data));
+	return res.get();
 }
-void ScriptEngineCache::RemoveCache(const std::wstring& name) {
+bool ScriptEngineCache::RemoveCache(const std::wstring& name) {
 	auto itrFind = cache_.find(name);
-	if (cache_.find(name) != cache_.end())
-		cache_.erase(itrFind);
+	if (cache_.find(name) == cache_.end() || itrFind->second->RefCount() > 0)
+		return false;
+	cache_.erase(itrFind);
+	return true;
 }
-shared_ptr<ScriptEngineData> ScriptEngineCache::GetCache(const std::wstring& name) {
+ScriptEngineData* ScriptEngineCache::GetCache(const std::wstring& name) {
 	auto itrFind = cache_.find(name);
 	if (cache_.find(name) == cache_.end()) return nullptr;
-	return itrFind->second;
+	return itrFind->second.get();
 }
 bool ScriptEngineCache::IsExists(const std::wstring& name) {
 	return cache_.find(name) != cache_.end();
@@ -193,33 +197,6 @@ static const std::vector<function> commonFunction = {
 	{ "RaiseError", ScriptClientBase::Func_RaiseError, 1 },
 	{ "RaiseMessageWindow", ScriptClientBase::Func_RaiseMessageWindow, 2 },
 	{ "RaiseMessageWindow", ScriptClientBase::Func_RaiseMessageWindow, 3 },	//Overloaded
-
-	//Common data
-	{ "SetCommonData", ScriptClientBase::Func_SetCommonData, 2 },
-	{ "GetCommonData", ScriptClientBase::Func_GetCommonData, 2 },
-	{ "GetCommonData", ScriptClientBase::Func_GetCommonData, 1 },	//Overloaded
-	{ "ClearCommonData", ScriptClientBase::Func_ClearCommonData, 0 },
-	{ "DeleteCommonData", ScriptClientBase::Func_DeleteCommonData, 1 },
-	{ "SetAreaCommonData", ScriptClientBase::Func_SetAreaCommonData, 3 },
-	{ "GetAreaCommonData", ScriptClientBase::Func_GetAreaCommonData, 3 },
-	{ "GetAreaCommonData", ScriptClientBase::Func_GetAreaCommonData, 2 },	//Overloaded
-	{ "ClearAreaCommonData", ScriptClientBase::Func_ClearAreaCommonData, 1 },
-	{ "DeleteAreaCommonData", ScriptClientBase::Func_DeleteAreaCommonData, 2 },
-	{ "DeleteWholeAreaCommonData", ScriptClientBase::Func_DeleteWholeAreaCommonData, 1 },
-	{ "CreateCommonDataArea", ScriptClientBase::Func_CreateCommonDataArea, 1 },
-	{ "CopyCommonDataArea", ScriptClientBase::Func_CopyCommonDataArea, 2 },
-	{ "IsCommonDataAreaExists", ScriptClientBase::Func_IsCommonDataAreaExists, 1 },
-	{ "GetCommonDataAreaKeyList", ScriptClientBase::Func_GetCommonDataAreaKeyList, 0 },
-	{ "GetCommonDataValueKeyList", ScriptClientBase::Func_GetCommonDataValueKeyList, 1 },
-
-	{ "LoadCommonDataValuePointer", ScriptClientBase::Func_LoadCommonDataValuePointer, 1 },
-	{ "LoadCommonDataValuePointer", ScriptClientBase::Func_LoadCommonDataValuePointer, 2 },			//Overloaded
-	{ "LoadAreaCommonDataValuePointer", ScriptClientBase::Func_LoadAreaCommonDataValuePointer, 2 },
-	{ "LoadAreaCommonDataValuePointer", ScriptClientBase::Func_LoadAreaCommonDataValuePointer, 3 },	//Overloaded
-	{ "IsValidCommonDataValuePointer", ScriptClientBase::Func_IsValidCommonDataValuePointer, 1 },
-	{ "SetCommonDataPtr", ScriptClientBase::Func_SetCommonDataPtr, 2 },
-	{ "GetCommonDataPtr", ScriptClientBase::Func_GetCommonDataPtr, 1 },
-	{ "GetCommonDataPtr", ScriptClientBase::Func_GetCommonDataPtr, 2 },		//Overloaded
 };
 static const std::vector<constant> commonConstant = {
 	constant("NULL", 0i64),
@@ -278,7 +255,7 @@ uint64_t ScriptClientBase::prandCalls_ = 0;
 ScriptClientBase::ScriptClientBase() {
 	bError_ = false;
 
-	engine_.reset(new ScriptEngineData());
+	engineData_ = nullptr;
 	machine_ = nullptr;
 
 	mainThreadID_ = -1;
@@ -289,10 +266,10 @@ ScriptClientBase::ScriptClientBase() {
 	{
 		DWORD seed = SystemUtility::GetCpuTime2();
 
-		mt_ = std::make_shared<RandProvider>();
+		mt_ = make_shared<RandProvider>();
 		mt_->Initialize(seed ^ 0xc3c3c3c3);
 
-		mtEffect_ = std::make_shared<RandProvider>();
+		mtEffect_ = make_shared<RandProvider>();
 		mtEffect_->Initialize(((seed ^ 0xf27ea021) << 11) ^ ((seed ^ 0x8b56c1b5) >> 11));
 	}
 
@@ -305,6 +282,8 @@ ScriptClientBase::ScriptClientBase() {
 	Reset();
 }
 ScriptClientBase::~ScriptClientBase() {
+	if (engineData_)
+		engineData_->RemoveRef();
 }
 
 void ScriptClientBase::_AddFunction(const char* name, dnh_func_callback_t f, size_t arguments) {
@@ -322,11 +301,11 @@ void ScriptClientBase::_RaiseError(int line, const std::wstring& message) {
 	bError_ = true;
 	std::wstring errorPos = _GetErrorLineSource(line);
 
-	ScriptFileLineMap* mapLine = engine_->GetScriptFileLineMap();
+	ScriptFileLineMap* mapLine = engineData_->GetScriptFileLineMap();
 	ScriptFileLineMap::Entry* entry = mapLine->GetEntry(line);
 
 	int lineOriginal = -1;
-	std::wstring entryPath = engine_->GetPath();
+	std::wstring entryPath = engineData_->GetPath();
 	if (entry) {
 		lineOriginal = entry->lineEndOriginal_ - (entry->lineEnd_ - line);
 		entryPath = entry->path_;
@@ -336,13 +315,13 @@ void ScriptClientBase::_RaiseError(int line, const std::wstring& message) {
 	std::wstring str = StringUtility::Format(L"%s\r\n%s" "\r\n[%s (main=%s)] " "line-> %d\r\n\r\n↓\r\n%s\r\n～～～",
 		message.c_str(),
 		entryPath.c_str(),
-		fileName.c_str(), PathProperty::GetFileName(engine_->GetPath()).c_str(),
+		fileName.c_str(), PathProperty::GetFileName(engineData_->GetPath()).c_str(),
 		lineOriginal, errorPos.c_str());
 	throw wexception(str);
 }
 void ScriptClientBase::_RaiseErrorFromEngine() {
-	int line = engine_->GetEngine()->get_error_line();
-	_RaiseError(line, engine_->GetEngine()->get_error_message());
+	int line = engineData_->GetEngine()->get_error_line();
+	_RaiseError(line, engineData_->GetEngine()->get_error_message());
 }
 void ScriptClientBase::_RaiseErrorFromMachine() {
 	int line = machine_->get_error_line();
@@ -351,8 +330,8 @@ void ScriptClientBase::_RaiseErrorFromMachine() {
 std::wstring ScriptClientBase::_GetErrorLineSource(int line) {
 	if (line == 0) return L"";
 
-	Encoding::Type encoding = engine_->GetEncoding();
-	std::vector<char>& source = engine_->GetSource();
+	Encoding::Type encoding = engineData_->GetEncoding();
+	std::vector<char>& source = engineData_->GetSource();
 
 	int tLine = 1;
 
@@ -372,41 +351,47 @@ std::wstring ScriptClientBase::_GetErrorLineSource(int line) {
 	return Encoding::BytesToWString(pStr, size, encoding);
 }
 std::vector<char> ScriptClientBase::_ParseScriptSource(std::vector<char>& source) {
-	ScriptFileLineMap* lineMap = engine_->GetScriptFileLineMap();
+	ScriptFileLineMap* lineMap = engineData_->GetScriptFileLineMap();
 
 	lineMap->Clear();
-	ScriptLoader scriptLoader(this, engine_->GetPath(), source, lineMap);
+	ScriptLoader scriptLoader(this, engineData_->GetPath(), source, lineMap);
 
 	scriptLoader.Parse();
 
 	return scriptLoader.GetResult();
 }
 bool ScriptClientBase::_CreateEngine() {
-	unique_ptr<script_engine> engine(new script_engine(engine_->GetSource(), &func_, &const_));
-	engine_->SetEngine(std::move(engine));
-	return !engine_->GetEngine()->get_error();
+	unique_ptr<script_engine> engine(new script_engine(engineData_->GetSource(), &func_, &const_));
+	engineData_->SetEngine(std::move(engine));
+	return !engineData_->GetEngine()->get_error();
 }
-bool ScriptClientBase::SetSourceFromFile(std::wstring path) {
-	path = PathProperty::GetUnique(path);
+void ScriptClientBase::SetPath(const std::wstring& path) {
+	std::wstring fixedPath = PathProperty::GetUnique(path);
 
-	if (cache_) {
-		shared_ptr<ScriptEngineData> pCachedEngine = cache_->GetCache(path);
-		if (pCachedEngine) {
-			engine_ = pCachedEngine;
-			return true;
-		}
+	if (auto pFindCache = cache_->GetCache(fixedPath)) {
+		engineData_ = pFindCache;
+		return;
 	}
 
-	engine_->SetPath(path);
+	// Script not found in cache, create a new entry
+
+	engineData_ = cache_->AddCache(fixedPath, make_unique<ScriptEngineData>());
+	engineData_->SetPath(fixedPath);
+	engineData_->AddRef();
+}
+bool ScriptClientBase::LoadSourceFromFile() {
+	std::wstring& path = GetPath();
 	shared_ptr<FileReader> reader = FileManager::GetBase()->GetFileReader(path);
 	if (reader == nullptr || !reader->Open())
 		throw gstd::wexception(L"SetScriptFileSource: " + ErrorUtility::GetFileNotFoundErrorMessage(path, true));
 
 	size_t size = reader->GetFileSize();
+
 	std::vector<char> source;
 	source.resize(size);
 	reader->Read(&source[0], size);
-	this->SetSource(source);
+
+	SetSource(source);
 
 	return true;
 }
@@ -417,26 +402,23 @@ void ScriptClientBase::SetSource(const std::string& source) {
 	this->SetSource(vect);
 }
 void ScriptClientBase::SetSource(std::vector<char>& source) {
-	engine_->SetSource(source);
-	ScriptFileLineMap* mapLine = engine_->GetScriptFileLineMap();
-	mapLine->AddEntry(engine_->GetPath(), 1, StringUtility::CountCharacter(source, '\n') + 1);
+	engineData_->SetSource(source);
+	ScriptFileLineMap* mapLine = engineData_->GetScriptFileLineMap();
+	mapLine->AddEntry(engineData_->GetPath(), 1, StringUtility::CountCharacter(source, '\n') + 1);
 }
 void ScriptClientBase::Compile() {
-	if (engine_->GetEngine() == nullptr) {
-		std::vector<char> source = _ParseScriptSource(engine_->GetSource());
-		engine_->SetSource(source);
+	if (engineData_->GetEngine() == nullptr) {
+		std::vector<char> source = _ParseScriptSource(engineData_->GetSource());
+		engineData_->SetSource(source);
 
 		bool bCreateSuccess = _CreateEngine();
 		if (!bCreateSuccess) {
 			bError_ = true;
 			_RaiseErrorFromEngine();
 		}
-		if (cache_ != nullptr && engine_->GetPath().size() > 0) {
-			cache_->AddCache(engine_->GetPath(), engine_);
-		}
 	}
 
-	machine_.reset(new script_machine(engine_->GetEngine().get()));
+	machine_.reset(new script_machine(engineData_->GetEngine().get()));
 	if (machine_->get_error()) {
 		bError_ = true;
 		_RaiseErrorFromMachine();
@@ -484,7 +466,7 @@ bool ScriptClientBase::IsEventExists(const std::string& name, std::map<std::stri
 	if (bError_) {
 		if (machine_ && machine_->get_error())
 			_RaiseErrorFromMachine();
-		else if (engine_->GetEngine()->get_error())
+		else if (engineData_->GetEngine()->get_error())
 			_RaiseErrorFromEngine();
 		return false;
 	}
@@ -601,7 +583,7 @@ void ScriptClientBase::CheckRunInMainThread() {
 }
 std::wstring ScriptClientBase::_ExtendPath(std::wstring path) {
 	int line = machine_->get_current_line();
-	const std::wstring& pathScript = GetEngine()->GetScriptFileLineMap()->GetPath(line);
+	const std::wstring& pathScript = GetEngineData()->GetScriptFileLineMap()->GetPath(line);
 
 	path = StringUtility::ReplaceAll(path, L'\\', L'/');
 	path = StringUtility::ReplaceAll(path, L"./", pathScript);
@@ -850,6 +832,7 @@ static value _ScriptValueLerp(script_machine* machine, const value* v1, const va
 		&& v2->get_type()->get_kind() == type_data::type_kind::tk_array)
 	{
 		value res;
+
 		if (v1->length_as_array() != v2->length_as_array()) {
 			std::string err = StringUtility::Format("Sizes must be the same when interpolating arrays. (%u and %u)",
 				v1->length_as_array(), v2->length_as_array());
@@ -1224,7 +1207,7 @@ value ScriptClientBase::Func_StringFormat(script_machine* machine, int argc, con
 
 		std::list<std::wstring> stringCache;
 		std::vector<byte> fakeVaList;
-		char tmp[8];
+		char tmp[8]{};
 
 		const value* pValue = &argv[2];
 		size_t iMem = 0;
@@ -1321,17 +1304,19 @@ value ScriptClientBase::Func_RegexMatchRepeated(script_machine* machine, int arg
 	std::vector<std::wstring> singleArray;
 
 	std::wregex reg(pattern);
+
 	auto itrBegin = std::wsregex_iterator(str.begin(), str.end(), reg);
 	auto itrEnd = std::wsregex_iterator();
 
-	valueArrayRes.resize(std::distance(itrBegin, itrEnd));
 	for (size_t i = 0; itrBegin != itrEnd; ++itrBegin, ++i) {
 		const std::wsmatch& match = *itrBegin;
+
 		singleArray.clear();
 		for (const std::wssub_match& itrMatch : match) {
 			singleArray.push_back(itrMatch.str());
 		}
-		valueArrayRes[i] = script->CreateStringArrayValue(singleArray);
+
+		valueArrayRes.push_back(script->CreateStringArrayValue(singleArray));
 	}
 
 	return script->CreateValueArrayValue(valueArrayRes);
@@ -1374,14 +1359,14 @@ value ScriptClientBase::Func_ReflectAngle(script_machine* machine, int argc, con
 //共通関数：パス関連
 value ScriptClientBase::Func_GetParentScriptDirectory(script_machine* machine, int argc, const value* argv) {
 	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	const std::wstring& path = script->GetEngine()->GetPath();
+	const std::wstring& path = script->GetEngineData()->GetPath();
 	std::wstring res = PathProperty::GetFileDirectory(path);
 	return script->CreateStringValue(res);
 }
 value ScriptClientBase::Func_GetCurrentScriptDirectory(script_machine* machine, int argc, const value* argv) {
 	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
 	int line = machine->get_current_line();
-	const std::wstring& path = script->GetEngine()->GetScriptFileLineMap()->GetPath(line);
+	const std::wstring& path = script->GetEngineData()->GetScriptFileLineMap()->GetPath(line);
 	std::wstring res = PathProperty::GetFileDirectory(path);
 	return script->CreateStringValue(res);
 }
@@ -1503,7 +1488,7 @@ value ScriptClientBase::Func_WriteLog(script_machine* machine, int argc, const v
 		if ((++i) >= argc) break;
 		msg += L",";
 	}
-	Logger::WriteTop(msg);
+	Logger::WriteTop(ILogger::LogType::User1, msg);
 	return value();
 }
 value ScriptClientBase::Func_RaiseError(script_machine* machine, int argc, const value* argv) {
@@ -1535,285 +1520,6 @@ value ScriptClientBase::Func_RaiseMessageWindow(script_machine* machine, int arg
 	return ScriptClientBase::CreateIntValue(res);
 }
 
-//共通関数：共通データ
-value ScriptClientBase::Func_SetCommonData(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	auto itrArea = commonDataManager->GetDefaultAreaIterator();
-	std::string key = StringUtility::ConvertWideToMulti(argv[0].as_string());
-	shared_ptr<ScriptCommonData> dataArea = commonDataManager->GetData(itrArea);
-	dataArea->SetValue(key, argv[1]);
-
-	return value();
-}
-value ScriptClientBase::Func_GetCommonData(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	value res;
-	if (argc == 2)
-		res = argv[1];
-
-	auto itrArea = commonDataManager->GetDefaultAreaIterator();
-	std::string key = StringUtility::ConvertWideToMulti(argv[0].as_string());
-	shared_ptr<ScriptCommonData> dataArea = commonDataManager->GetData(itrArea);
-
-	auto resFind = dataArea->IsExists(key);
-	if (resFind.first)
-		res = resFind.second->second;
-
-	return res;
-}
-value ScriptClientBase::Func_ClearCommonData(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	auto itrArea = commonDataManager->GetDefaultAreaIterator();
-	shared_ptr<ScriptCommonData> dataArea = commonDataManager->GetData(itrArea);
-	dataArea->Clear();
-
-	return value();
-}
-value ScriptClientBase::Func_DeleteCommonData(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-	auto area = commonDataManager->GetDefaultAreaIterator();
-
-	std::string key = StringUtility::ConvertWideToMulti(argv[0].as_string());
-	shared_ptr<ScriptCommonData> dataArea = commonDataManager->GetData(area);
-	dataArea->DeleteValue(key);
-
-	return value();
-}
-value ScriptClientBase::Func_SetAreaCommonData(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	std::string area = StringUtility::ConvertWideToMulti(argv[0].as_string());
-	std::string key = StringUtility::ConvertWideToMulti(argv[1].as_string());
-
-	auto resFind = commonDataManager->IsExists(area);
-	if (resFind.first) {
-		shared_ptr<ScriptCommonData> dataArea = commonDataManager->GetData(resFind.second);
-		dataArea->SetValue(key, argv[2]);
-	}
-
-	return value();
-}
-value ScriptClientBase::Func_GetAreaCommonData(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	value res;
-	if (argc == 3)
-		res = argv[2];
-
-	std::string area = StringUtility::ConvertWideToMulti(argv[0].as_string());
-	std::string key = StringUtility::ConvertWideToMulti(argv[1].as_string());
-
-	auto resFindArea = commonDataManager->IsExists(area);
-	if (resFindArea.first) {
-		shared_ptr<ScriptCommonData> dataArea = commonDataManager->GetData(resFindArea.second);
-		auto resFindData = dataArea->IsExists(key);
-		if (resFindData.first)
-			res = dataArea->GetValue(resFindData.second);
-	}
-	return res;
-}
-value ScriptClientBase::Func_ClearAreaCommonData(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	std::string area = StringUtility::ConvertWideToMulti(argv[0].as_string());
-
-	auto resFind = commonDataManager->IsExists(area);
-	if (resFind.first) {
-		shared_ptr<ScriptCommonData> dataArea = commonDataManager->GetData(resFind.second);
-		dataArea->Clear();
-	}
-
-	return value();
-}
-value ScriptClientBase::Func_DeleteAreaCommonData(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	std::string area = StringUtility::ConvertWideToMulti(argv[0].as_string());
-	std::string key = StringUtility::ConvertWideToMulti(argv[1].as_string());
-
-	auto resFind = commonDataManager->IsExists(area);
-	if (resFind.first) {
-		shared_ptr<ScriptCommonData> dataArea = commonDataManager->GetData(resFind.second);
-		dataArea->DeleteValue(key);
-	}
-
-	return value();
-}
-value ScriptClientBase::Func_DeleteWholeAreaCommonData(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	std::string area = StringUtility::ConvertWideToMulti(argv->as_string());
-	commonDataManager->Erase(area);
-
-	return value();
-}
-value ScriptClientBase::Func_CreateCommonDataArea(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	std::string area = StringUtility::ConvertWideToMulti(argv->as_string());
-	commonDataManager->CreateArea(area);
-
-	return value();
-}
-value ScriptClientBase::Func_CopyCommonDataArea(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	std::string areaDest = StringUtility::ConvertWideToMulti(argv[0].as_string());
-	std::string areaSrc = StringUtility::ConvertWideToMulti(argv[1].as_string());
-	if (commonDataManager->IsExists(areaSrc).first)
-		commonDataManager->CopyArea(areaDest, areaSrc);
-
-	return value();
-}
-value ScriptClientBase::Func_IsCommonDataAreaExists(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	std::string area = StringUtility::ConvertWideToMulti(argv->as_string());
-	bool res = commonDataManager->IsExists(area).first;
-
-	return script->CreateBooleanValue(res);
-}
-value ScriptClientBase::Func_GetCommonDataAreaKeyList(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	std::vector<std::string> listKey;
-	for (auto itr = commonDataManager->MapBegin(); itr != commonDataManager->MapEnd(); ++itr) {
-		listKey.push_back(itr->first);
-	}
-
-	return script->CreateStringArrayValue(listKey);
-}
-value ScriptClientBase::Func_GetCommonDataValueKeyList(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	std::string area = StringUtility::ConvertWideToMulti(argv->as_string());
-
-	std::vector<std::string> listKey;
-
-	auto resFind = commonDataManager->IsExists(area);
-	if (resFind.first) {
-		shared_ptr<ScriptCommonData> data = commonDataManager->GetData(resFind.second);
-		for (auto itr = data->MapBegin(); itr != data->MapEnd(); ++itr) {
-			listKey.push_back(itr->first);
-		}
-	}
-
-	return script->CreateStringArrayValue(listKey);
-}
-
-value ScriptClientBase::Func_LoadCommonDataValuePointer(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	auto itrArea = commonDataManager->GetDefaultAreaIterator();
-	auto dataArea = commonDataManager->GetData(itrArea);
-	std::string key = StringUtility::ConvertWideToMulti(argv[0].as_string());
-
-	uint64_t res = (uint64_t)nullptr;
-
-	{
-		value* pData = nullptr;
-
-		auto resFind = dataArea->IsExists(key);
-		if (resFind.first) {
-			pData = &(resFind.second->second);
-		}
-		else if (argc == 2) {
-			dataArea->SetValue(key, argv[1]);
-			pData = &(dataArea->IsExists(key).second->second);
-		}
-		else dataArea = nullptr;
-
-		//Galaxy brain hax method
-		res = ((uint64_t)(dataArea.get()) << 32) | (uint64_t)(pData);
-	}
-
-	return script->CreateIntValue((int64_t&)res);
-}
-value ScriptClientBase::Func_LoadAreaCommonDataValuePointer(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	std::string area = StringUtility::ConvertWideToMulti(argv[0].as_string());
-	std::string key = StringUtility::ConvertWideToMulti(argv[1].as_string());
-
-	uint64_t res = (uint64_t)nullptr;
-
-	{
-		ScriptCommonData* pArea = commonDataManager->GetData(area).get();
-		value* pData = nullptr;
-
-		if (pArea) {
-			auto resFind = pArea->IsExists(key);
-			if (resFind.first) {
-				pData = &(resFind.second->second);
-			}
-			else if (argc == 3) {
-				pArea->SetValue(key, argv[2]);
-				pData = &(pArea->IsExists(key).second->second);
-			}
-			else pArea = nullptr;
-
-			res = ((uint64_t)(pArea) << 32) | (uint64_t)(pData);
-		}
-	}
-
-	return script->CreateIntValue((int64_t&)res);
-}
-value ScriptClientBase::Func_SetCommonDataPtr(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	int64_t val = argv[0].as_int();
-
-	ScriptCommonData::_Script_PointerData ptrData;
-	if (ScriptCommonData::Script_DecomposePtr((uint64_t&)val, &ptrData)) {
-		*(ptrData.pData) = argv[1];
-	}
-
-	return value();
-}
-value ScriptClientBase::Func_GetCommonDataPtr(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	value res;
-	if (argc == 2) res = argv[1];
-
-	int64_t val = argv[0].as_int();
-
-	ScriptCommonData::_Script_PointerData ptrData;
-	if (ScriptCommonData::Script_DecomposePtr((uint64_t&)val, &ptrData)) {
-		res = *(ptrData.pData);
-	}
-
-	return res;
-}
-value ScriptClientBase::Func_IsValidCommonDataValuePointer(script_machine* machine, int argc, const value* argv) {
-	ScriptClientBase* script = reinterpret_cast<ScriptClientBase*>(machine->data);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
-
-	int64_t val = argv[0].as_int();
-	return script->CreateBooleanValue(ScriptCommonData::Script_DecomposePtr((uint64_t&)val, nullptr));
-}
-
 //****************************************************************************
 //ScriptLoader
 //****************************************************************************
@@ -1831,7 +1537,7 @@ ScriptLoader::ScriptLoader(ScriptClientBase* script, const std::wstring& path, s
 }
 
 void ScriptLoader::_RaiseError(int line, const std::wstring& err) {
-	script_->engine_->SetSource(src_);
+	script_->engineData_->SetSource(src_);
 	script_->_RaiseError(line, err);
 }
 void ScriptLoader::_DumpRes() {
@@ -2028,7 +1734,7 @@ void ScriptLoader::_ParseInclude() {
 							size_t targetBomSize = 0;
 							Encoding::Type includeEncoding = Encoding::UTF8;
 							if (reader->GetFileSize() >= 2) {
-								byte data[3];
+								byte data[3]{};
 								reader->Read(data, 3);
 
 								includeEncoding = Encoding::Detect((char*)data, reader->GetFileSize());
@@ -2410,344 +2116,3 @@ std::wstring& ScriptFileLineMap::GetPath(int line) {
 	return entry->path_;
 }
 
-//****************************************************************************
-//ScriptCommonDataManager
-//****************************************************************************
-const std::string ScriptCommonDataManager::nameAreaDefault_ = "";
-ScriptCommonDataManager* ScriptCommonDataManager::inst_ = nullptr;
-ScriptCommonDataManager::ScriptCommonDataManager() {
-	inst_ = this;
-
-	defaultAreaIterator_ = CreateArea(nameAreaDefault_);
-}
-ScriptCommonDataManager::~ScriptCommonDataManager() {
-	for (auto itr = mapData_.begin(); itr != mapData_.end(); ++itr) {
-		itr->second->Clear();
-		//delete itr->second;
-	}
-	mapData_.clear();
-
-	inst_ = nullptr;
-}
-void ScriptCommonDataManager::Clear() {
-	for (auto itr = mapData_.begin(); itr != mapData_.end(); ++itr) {
-		itr->second->Clear();
-		//delete itr->second;
-	}
-	mapData_.clear();
-}
-void ScriptCommonDataManager::Erase(const std::string& name) {
-	auto itr = mapData_.find(name);
-	if (itr != mapData_.end()) {
-		itr->second->Clear();
-		//delete itr->second;
-		mapData_.erase(itr);
-	}
-}
-std::pair<bool, ScriptCommonDataManager::CommonDataMap::iterator> ScriptCommonDataManager::IsExists(const std::string& name) {
-	auto itr = mapData_.find(name);
-	return std::make_pair(itr != mapData_.end(), itr);
-}
-ScriptCommonDataManager::CommonDataMap::iterator ScriptCommonDataManager::CreateArea(const std::string& name) {
-	auto itrCheck = mapData_.find(name);
-	if (itrCheck != mapData_.end()) {
-		Logger::WriteTop(StringUtility::Format("ScriptCommonDataManager: Area \"%s\" already exists.", name.c_str()));
-		return itrCheck;
-	}
-	auto pairRes = mapData_.insert(std::make_pair(name, new ScriptCommonData()));
-	return pairRes.first;
-}
-void ScriptCommonDataManager::CopyArea(const std::string& nameDest, const std::string& nameSrc) {
-	shared_ptr<ScriptCommonData> dataSrc = mapData_[nameSrc];
-	shared_ptr<ScriptCommonData> dataDest(new ScriptCommonData());
-	dataDest->Copy(dataSrc);
-	mapData_[nameDest] = dataDest;
-}
-shared_ptr<ScriptCommonData> ScriptCommonDataManager::GetData(const std::string& name) {
-	auto itr = mapData_.find(name);
-	return GetData(itr);
-}
-shared_ptr<ScriptCommonData> ScriptCommonDataManager::GetData(CommonDataMap::iterator itr) {
-	if (itr == mapData_.end()) return nullptr;
-	return itr->second;
-}
-void ScriptCommonDataManager::SetData(const std::string& name, shared_ptr<ScriptCommonData> commonData) {
-	mapData_[name] = commonData;
-}
-void ScriptCommonDataManager::SetData(CommonDataMap::iterator itr, shared_ptr<ScriptCommonData> commonData) {
-	if (itr == mapData_.end()) return;
-	itr->second = commonData;
-}
-//****************************************************************************
-//ScriptCommonData
-//****************************************************************************
-ScriptCommonData::ScriptCommonData() {
-	verifHash_ = DATA_HASH;
-}
-ScriptCommonData::~ScriptCommonData() {}
-void ScriptCommonData::Clear() {
-	mapValue_.clear();
-}
-std::pair<bool, std::map<std::string, gstd::value>::iterator> ScriptCommonData::IsExists(const std::string& name) {
-	auto itr = mapValue_.find(name);
-	return std::make_pair(itr != mapValue_.end(), itr);
-}
-gstd::value* ScriptCommonData::GetValueRef(const std::string& name) {
-	auto itr = mapValue_.find(name);
-	return GetValueRef(itr);
-}
-gstd::value* ScriptCommonData::GetValueRef(std::map<std::string, gstd::value>::iterator itr) {
-	if (itr == mapValue_.end()) return nullptr;
-	return &itr->second;
-}
-gstd::value ScriptCommonData::GetValue(const std::string& name) {
-	auto itr = mapValue_.find(name);
-	return GetValue(itr);
-}
-gstd::value ScriptCommonData::GetValue(std::map<std::string, gstd::value>::iterator itr) {
-	if (itr == mapValue_.end()) return value();
-	return itr->second;
-}
-void ScriptCommonData::SetValue(const std::string& name, gstd::value v) {
-	mapValue_[name] = v;
-}
-void ScriptCommonData::SetValue(std::map<std::string, gstd::value>::iterator itr, gstd::value v) {
-	if (itr == mapValue_.end()) return;
-	itr->second = v;
-}
-void ScriptCommonData::DeleteValue(const std::string& name) {
-	mapValue_.erase(name);
-}
-void ScriptCommonData::Copy(shared_ptr<ScriptCommonData>& dataSrc) {
-	mapValue_.clear();
-	for (auto itrKey = dataSrc->MapBegin(); itrKey != dataSrc->MapEnd(); ++itrKey) {
-		mapValue_.insert(std::make_pair(itrKey->first, itrKey->second));
-	}
-}
-void ScriptCommonData::ReadRecord(gstd::RecordBuffer& record) {
-	mapValue_.clear();
-
-	std::vector<std::string> listKey = record.GetKeyList();
-	for (const std::string& key : listKey) {
-		shared_ptr<RecordEntry> entry = record.GetEntry(key);
-		gstd::ByteBuffer& buffer = entry->GetBufferRef();
-
-		gstd::value storedVal;
-		uint32_t storedSize = 0U;
-		buffer.Seek(0);
-		buffer.Read(&storedSize, sizeof(uint32_t));
-
-		if (storedSize > 0U) {
-			gstd::ByteBuffer bufferRes;
-			bufferRes.SetSize(storedSize);
-			buffer.Read(bufferRes.GetPointer(), bufferRes.GetSize());
-			storedVal = _ReadRecord(bufferRes);
-		}
-
-		mapValue_[key] = storedVal;
-	}
-}
-gstd::value ScriptCommonData::_ReadRecord(gstd::ByteBuffer& buffer) {
-	script_type_manager* scriptTypeManager = script_type_manager::get_instance();
-
-	uint8_t kind;
-	buffer.Read(&kind, sizeof(uint8_t));
-
-	switch ((type_data::type_kind)kind) {
-	case type_data::type_kind::tk_int:
-	{
-		int64_t data = buffer.ReadInteger64();
-		return value(scriptTypeManager->get_int_type(), data);
-	}
-	case type_data::type_kind::tk_float:
-	{
-		double data = buffer.ReadDouble();
-		return value(scriptTypeManager->get_float_type(), data);
-	}
-	case type_data::type_kind::tk_char:
-	{
-		wchar_t data = buffer.ReadValue<wchar_t>();
-		return value(scriptTypeManager->get_char_type(), data);
-	}
-	case type_data::type_kind::tk_boolean:
-	{
-		bool data = buffer.ReadBoolean();
-		return value(scriptTypeManager->get_boolean_type(), data);
-	}
-	case type_data::type_kind::tk_array:
-	{
-		uint32_t arrayLength = buffer.ReadValue<uint32_t>();
-		if (arrayLength > 0U) {
-			std::vector<value> v;
-			v.resize(arrayLength);
-			for (uint32_t iArray = 0; iArray < arrayLength; iArray++) {
-				v[iArray] = _ReadRecord(buffer);
-			}
-			value res;
-			res.reset(scriptTypeManager->get_array_type(v[0].get_type()), v);
-			return res;
-		}
-		return value(scriptTypeManager->get_null_array_type(), std::wstring());
-	}
-	}
-
-	return value();
-}
-void ScriptCommonData::WriteRecord(gstd::RecordBuffer& record) {
-	for (auto itrValue = mapValue_.begin(); itrValue != mapValue_.end(); ++itrValue) {
-		const std::string& key = itrValue->first;
-		const gstd::value& comVal = itrValue->second;
-		
-		gstd::ByteBuffer buffer;
-		buffer.WriteValue<uint32_t>(0U);
-
-		if (comVal.has_data()) {
-			_WriteRecord(buffer, comVal);
-			buffer.Seek(0U);
-			buffer.WriteValue<uint32_t>(buffer.GetSize() - sizeof(uint32_t));
-		}
-
-		record.SetRecord(key, buffer.GetPointer(), buffer.GetSize());
-	}
-}
-void ScriptCommonData::_WriteRecord(gstd::ByteBuffer& buffer, const gstd::value& comValue) {
-	type_data::type_kind kind = comValue.get_type()->get_kind();
-
-	buffer.WriteValue<uint8_t>((uint8_t)kind);
-	switch (kind) {
-	case type_data::type_kind::tk_int:
-		buffer.WriteInteger64(comValue.as_int());
-		break;
-	case type_data::type_kind::tk_float:
-		buffer.WriteDouble(comValue.as_float());
-		break;
-	case type_data::type_kind::tk_char:
-		buffer.WriteValue(comValue.as_char());
-		break;
-	case type_data::type_kind::tk_boolean:
-		buffer.WriteBoolean(comValue.as_boolean());
-		break;
-	case type_data::type_kind::tk_array:
-	{
-		uint32_t arrayLength = comValue.length_as_array();
-		buffer.WriteValue(arrayLength);
-		for (size_t iArray = 0; iArray < arrayLength; iArray++) {
-			const value& arrayValue = comValue[iArray];
-			_WriteRecord(buffer, arrayValue);
-		}
-		break;
-	}
-	}
-}
-
-bool ScriptCommonData::Script_DecomposePtr(uint64_t val, _Script_PointerData* dst) {
-	//Pointer format:
-	//	63    32				31     0
-	//	xxxxxxxx				xxxxxxxx
-	//	(ScriptCommonData*)		(value*)
-
-	ScriptCommonData* pArea = (ScriptCommonData*)(val >> 32);
-	value* pData = (value*)(val & 0xffffffff);
-
-	if (dst) {
-		dst->pArea = pArea;
-		dst->pData = pData;
-	}
-	return pArea != nullptr && pData != nullptr && pArea->CheckHash();
-}
-
-//****************************************************************************
-//ScriptCommonDataPanel
-//****************************************************************************
-ScriptCommonDataInfoPanel::ScriptCommonDataInfoPanel() {
-	timeLastUpdate_ = 0;
-	timeUpdateInterval_ = 1000;
-	commonDataManager_ = nullptr;
-}
-bool ScriptCommonDataInfoPanel::_AddedLogger(HWND hTab) {
-	Create(hTab);
-
-	gstd::WListView::Style styleListViewArea;
-	styleListViewArea.SetStyle(WS_CHILD | WS_VISIBLE |
-		LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL | LVS_NOCOLUMNHEADER);
-	styleListViewArea.SetStyleEx(WS_EX_CLIENTEDGE);
-	styleListViewArea.SetListViewStyleEx(LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
-	wndListViewArea_.Create(hWnd_, styleListViewArea);
-	wndListViewArea_.AddColumn(256, 0, L"Area");
-
-	gstd::WListView::Style styleListViewValue;
-	styleListViewValue.SetStyle(WS_CHILD | WS_VISIBLE |
-		LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL | LVS_NOSORTHEADER);
-	styleListViewValue.SetStyleEx(WS_EX_CLIENTEDGE);
-	styleListViewValue.SetListViewStyleEx(LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
-	wndListViewValue_.Create(hWnd_, styleListViewValue);
-	wndListViewValue_.AddColumn(96, COL_KEY, L"Key");
-	wndListViewValue_.AddColumn(512, COL_VALUE, L"Value");
-
-	wndSplitter_.Create(hWnd_, WSplitter::TYPE_HORIZONTAL);
-	wndSplitter_.SetRatioY(0.25f);
-
-	return true;
-}
-void ScriptCommonDataInfoPanel::LocateParts() {
-	int wx = GetClientX();
-	int wy = GetClientY();
-	int wWidth = GetClientWidth();
-	int wHeight = GetClientHeight();
-
-	int ySplitter = (int)((float)wHeight * wndSplitter_.GetRatioY());
-	int heightSplitter = 6;
-
-	wndSplitter_.SetBounds(wx, ySplitter, wWidth, heightSplitter);
-	wndListViewArea_.SetBounds(wx, wy, wWidth, ySplitter);
-	wndListViewValue_.SetBounds(wx, ySplitter + heightSplitter, wWidth, wHeight - ySplitter - heightSplitter);
-}
-void ScriptCommonDataInfoPanel::Update() {
-	if (!IsWindowVisible()) return;
-	{
-		Lock lock(lock_);
-		//if (commonDataManager_) commonDataManager_->Clear();
-
-		if (commonDataManager_ = ScriptCommonDataManager::GetInstance()) {
-			_UpdateAreaView();
-			_UpdateValueView();
-		}
-		else {
-			wndListViewArea_.Clear();
-			wndListViewValue_.Clear();
-		}
-	}
-}
-void ScriptCommonDataInfoPanel::_UpdateAreaView() {
-	vecMapItr_.clear();
-
-	int iRow = 0;
-	for (auto itr = commonDataManager_->MapBegin(); itr != commonDataManager_->MapEnd(); ++itr, ++iRow) {
-		std::wstring key = StringUtility::ConvertMultiToWide(itr->first);
-		wndListViewArea_.SetText(iRow, COL_KEY, std::wstring(L"> ") + key);
-		vecMapItr_.push_back(itr);
-	}
-
-	int countRow = wndListViewArea_.GetRowCount();
-	for (; iRow < countRow; ++iRow)
-		wndListViewArea_.DeleteRow(iRow);
-}
-void ScriptCommonDataInfoPanel::_UpdateValueView() {
-	int indexArea = wndListViewArea_.GetSelectedRow();
-	if (indexArea < 0) {
-		wndListViewValue_.Clear();
-		return;
-	}
-
-	shared_ptr<ScriptCommonData>& selectedArea = commonDataManager_->GetData(vecMapItr_[indexArea]);
-	int iRow = 0;
-	for (auto itr = selectedArea->MapBegin(); itr != selectedArea->MapEnd(); ++itr, ++iRow) {
-		gstd::value* val = selectedArea->GetValueRef(itr);
-		wndListViewValue_.SetText(iRow, COL_KEY, StringUtility::ConvertMultiToWide(itr->first));
-		wndListViewValue_.SetText(iRow, COL_VALUE, val->as_string());
-	}
-
-	int countRow = wndListViewValue_.GetRowCount();
-	for (; iRow < countRow; ++iRow)
-		wndListViewValue_.DeleteRow(iRow);
-}

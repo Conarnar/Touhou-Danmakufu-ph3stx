@@ -436,7 +436,7 @@ namespace directx {
 		byte change_;
 
 		DxText text_;
-		shared_ptr<DxTextInfo> textInfo_;
+		DxTextInfo textInfo_;
 		shared_ptr<DxTextRenderObject> objRender_;
 
 		D3DXVECTOR2 center_;	//Transformation center
@@ -628,7 +628,7 @@ namespace directx {
 		byte byteOrder_;
 		byte codePage_;
 
-		gstd::ByteBuffer* buffer_;
+		gstd::ByteBuffer buffer_;
 		size_t lastRead_;
 	public:
 		DxBinaryFileObject();
@@ -641,7 +641,8 @@ namespace directx {
 		virtual bool OpenRW(const std::wstring& path);
 		virtual bool Store();
 
-		gstd::ByteBuffer* const GetBuffer() { return buffer_; }
+		gstd::ByteBuffer* GetBuffer() { return &buffer_; }
+		const gstd::ByteBuffer* GetBuffer() const { return &buffer_; }
 
 		byte GetCodePage() { return codePage_; }
 		void SetCodePage(byte page) { codePage_ = page; }

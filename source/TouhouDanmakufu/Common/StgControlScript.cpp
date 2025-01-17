@@ -19,14 +19,17 @@ StgControlScriptManager::~StgControlScriptManager() {
 //StgControlScriptInformation
 //*******************************************************************
 StgControlScriptInformation::StgControlScriptInformation() {
-	replayManager_ = new ReplayInformationManager();
+	replayManager_.reset(new ReplayInformationManager());
 }
 StgControlScriptInformation::~StgControlScriptInformation() {}
 void StgControlScriptInformation::LoadFreePlayerList() {
 	const std::wstring& dir = EPathProperty::GetPlayerScriptRootDirectory();
 	listFreePlayer_ = ScriptInformation::FindPlayerScriptInformationList(dir);
 
-	std::sort(listFreePlayer_.begin(), listFreePlayer_.end(), ScriptInformation::PlayerListSort());
+	std::sort(listFreePlayer_.begin(), listFreePlayer_.end(), 
+		[](const ref_count_ptr<ScriptInformation>& r, const ref_count_ptr<ScriptInformation>& l) {
+			return ScriptInformation::Sort::Compare(r, l);
+		});
 }
 void StgControlScriptInformation::LoadReplayInformation(std::wstring pathMainScript) {
 	replayManager_->UpdateInformationList(pathMainScript);
@@ -36,8 +39,36 @@ void StgControlScriptInformation::LoadReplayInformation(std::wstring pathMainScr
 //StgControlScript
 //*******************************************************************
 static const std::vector<function> stgControlFunction = {
-	//関数：
-	//STG制御共通関数：共通データ
+	// Common data
+	{ "SetCommonData", StgControlScript::Func_SetCommonData, 2 },
+	{ "GetCommonData", StgControlScript::Func_GetCommonData, 2 },
+	{ "GetCommonData", StgControlScript::Func_GetCommonData, 1 },	//Overloaded
+	{ "ClearCommonData", StgControlScript::Func_ClearCommonData, 0 },
+	{ "DeleteCommonData", StgControlScript::Func_DeleteCommonData, 1 },
+
+	{ "SetAreaCommonData", StgControlScript::Func_SetAreaCommonData, 3 },
+	{ "GetAreaCommonData", StgControlScript::Func_GetAreaCommonData, 3 },
+	{ "GetAreaCommonData", StgControlScript::Func_GetAreaCommonData, 2 },	//Overloaded
+	{ "ClearAreaCommonData", StgControlScript::Func_ClearAreaCommonData, 1 },
+	{ "DeleteAreaCommonData", StgControlScript::Func_DeleteAreaCommonData, 2 },
+
+	{ "DeleteWholeAreaCommonData", StgControlScript::Func_DeleteWholeAreaCommonData, 1 },
+	{ "CreateCommonDataArea", StgControlScript::Func_CreateCommonDataArea, 1 },
+	{ "CopyCommonDataArea", StgControlScript::Func_CopyCommonDataArea, 2 },
+	{ "IsCommonDataAreaExists", StgControlScript::Func_IsCommonDataAreaExists, 1 },
+	{ "GetCommonDataAreaKeyList", StgControlScript::Func_GetCommonDataAreaKeyList, 0 },
+	{ "GetCommonDataValueKeyList", StgControlScript::Func_GetCommonDataValueKeyList, 1 },
+
+	{ "LoadCommonDataValuePointer", StgControlScript::Func_LoadCommonDataValuePointer, 1 },
+	{ "LoadCommonDataValuePointer", StgControlScript::Func_LoadCommonDataValuePointer, 2 },			//Overloaded
+	{ "LoadAreaCommonDataValuePointer", StgControlScript::Func_LoadAreaCommonDataValuePointer, 2 },
+	{ "LoadAreaCommonDataValuePointer", StgControlScript::Func_LoadAreaCommonDataValuePointer, 3 },	//Overloaded
+	{ "IsValidCommonDataValuePointer", StgControlScript::Func_IsValidCommonDataValuePointer, 1 },
+	{ "SetCommonDataPtr", StgControlScript::Func_SetCommonDataPtr, 2 },
+	{ "GetCommonDataPtr", StgControlScript::Func_GetCommonDataPtr, 1 },
+	{ "GetCommonDataPtr", StgControlScript::Func_GetCommonDataPtr, 2 },		//Overloaded
+
+	// Common data save/load
 	{ "SaveCommonDataAreaA1", StgControlScript::Func_SaveCommonDataAreaA1, 1 },
 	{ "LoadCommonDataAreaA1", StgControlScript::Func_LoadCommonDataAreaA1, 1 },
 	{ "SaveCommonDataAreaA2", StgControlScript::Func_SaveCommonDataAreaA2, 2 },
@@ -193,53 +224,324 @@ StgControlScript::StgControlScript(StgSystemController* systemController) {
 	SetScriptEngineCache(systemController->GetScriptEngineCache());
 }
 
-//STG制御共通関数：共通データ
+// Common data
+
+value StgControlScript::Func_SetCommonData(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	auto area = commonDataManager->GetDefaultArea();
+	std::string key = STR_MULTI(argv[0].as_string());
+
+	area->SetValue(key, argv[1]);
+
+	return value();
+}
+value StgControlScript::Func_GetCommonData(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	auto area = commonDataManager->GetDefaultArea();
+	std::string key = STR_MULTI(argv[0].as_string());
+
+	value res;
+
+	if (auto pValue = area->GetValueRef(key))
+		res = *pValue;
+
+	if (!res.has_data() && argc == 2)
+		res = argv[1];
+
+	return res;
+}
+value StgControlScript::Func_ClearCommonData(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	auto area = commonDataManager->GetDefaultArea();
+	area->Clear();
+
+	return value();
+}
+value StgControlScript::Func_DeleteCommonData(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	auto area = commonDataManager->GetDefaultArea();
+	std::string key = STR_MULTI(argv[0].as_string());
+
+	area->DeleteValue(key);
+
+	return value();
+}
+value StgControlScript::Func_SetAreaCommonData(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	std::string area = STR_MULTI(argv[0].as_string());
+	std::string key = STR_MULTI(argv[1].as_string());
+
+	if (auto pArea = commonDataManager->GetArea(area)) {
+		pArea->SetValue(key, argv[2]);
+	}
+
+	return value();
+}
+value StgControlScript::Func_GetAreaCommonData(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	std::string area = STR_MULTI(argv[0].as_string());
+	std::string key = STR_MULTI(argv[1].as_string());
+
+	value res;
+
+	if (auto pArea = commonDataManager->GetArea(area)) {
+		if (auto pValue = pArea->GetValueRef(key))
+			res = *pValue;
+	}
+
+	if (!res.has_data() && argc == 3)
+			res = argv[2];
+
+	return res;
+}
+value StgControlScript::Func_ClearAreaCommonData(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	std::string area = STR_MULTI(argv[0].as_string());
+
+	if (auto pArea = commonDataManager->GetArea(area)) {
+		pArea->Clear();
+	}
+
+	return value();
+}
+value StgControlScript::Func_DeleteAreaCommonData(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	std::string area = STR_MULTI(argv[0].as_string());
+	std::string key = STR_MULTI(argv[1].as_string());
+
+	if (auto pArea = commonDataManager->GetArea(area)) {
+		pArea->DeleteValue(key);
+	}
+
+	return value();
+}
+
+value StgControlScript::Func_CreateCommonDataArea(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	std::string area = STR_MULTI(argv->as_string());
+	commonDataManager->CreateArea(area);
+
+	return value();
+}
+value StgControlScript::Func_DeleteWholeAreaCommonData(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	std::string area = STR_MULTI(argv->as_string());
+	commonDataManager->Erase(area);
+
+	return value();
+}
+value StgControlScript::Func_CopyCommonDataArea(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	std::string areaDest = STR_MULTI(argv[0].as_string());
+	std::string areaSrc = STR_MULTI(argv[1].as_string());
+
+	if (auto pSrc = commonDataManager->GetArea(areaSrc)) {
+		if (auto pDst = commonDataManager->GetArea(areaDest)) {
+			pDst->Copy(pSrc);
+		}
+	}
+
+	return value();
+}
+
+value StgControlScript::Func_IsCommonDataAreaExists(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	std::string area = STR_MULTI(argv->as_string());
+	bool res = commonDataManager->GetArea(area) != nullptr;
+
+	return script->CreateBooleanValue(res);
+}
+value StgControlScript::Func_GetCommonDataAreaKeyList(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	std::vector<std::string> listKey;
+	for (auto& [key, _] : *commonDataManager) {
+		listKey.push_back(key);
+	}
+
+	return script->CreateStringArrayValue(listKey);
+}
+value StgControlScript::Func_GetCommonDataValueKeyList(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	std::string area = STR_MULTI(argv->as_string());
+
+	std::vector<std::string> listKey;
+
+	if (auto pArea = commonDataManager->GetArea(area)) {
+		for (auto& [key, _] : *pArea) {
+			listKey.push_back(key);
+		}
+	}
+
+	return script->CreateStringArrayValue(listKey);
+}
+
+value StgControlScript::Func_LoadCommonDataValuePointer(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	auto area = commonDataManager->GetDefaultArea();
+	std::string key = STR_MULTI(argv[0].as_string());
+
+	uint64_t res = 0;
+	{
+		value* pData = nullptr;
+
+		if (auto pValue = area->GetValueRef(key)) {
+			pData = pValue;
+		}
+		else if (argc == 2) {
+			area->SetValue(key, argv[1]);
+			pData = area->GetValueRef(key);
+		}
+
+		res = (uint64_t)ScriptCommonData_Pointer(area, pData);
+	}
+
+	return script->CreateIntValue((int64_t&)res);
+}
+value StgControlScript::Func_LoadAreaCommonDataValuePointer(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	std::string nameArea = STR_MULTI(argv[0].as_string());
+	std::string key = STR_MULTI(argv[1].as_string());
+
+	uint64_t res = 0;
+	if (auto area = commonDataManager->GetArea(nameArea)) {
+		value* pData = nullptr;
+
+		if (auto pValue = area->GetValueRef(key)) {
+			pData = pValue;
+		}
+		else if (argc == 3) {
+			area->SetValue(key, argv[2]);
+			pData = area->GetValueRef(key);
+		}
+
+		res = (uint64_t)ScriptCommonData_Pointer(area, pData);
+	}
+
+	return script->CreateIntValue((int64_t&)res);
+}
+value StgControlScript::Func_SetCommonDataPtr(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	int64_t val = argv[0].as_int();
+
+	if (auto cdPtr = ScriptCommonData_Pointer::From((uint64_t&)val)) {
+		*cdPtr->data = argv[1];
+	}
+
+	return value();
+}
+value StgControlScript::Func_GetCommonDataPtr(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+	
+	int64_t val = argv[0].as_int();
+
+	value res;
+
+	if (auto cdPtr = ScriptCommonData_Pointer::From((uint64_t&)val)) {
+		res = *cdPtr->data;
+	}
+	else if (argc == 2) {
+		res = argv[1];
+	}
+
+	return res;
+}
+value StgControlScript::Func_IsValidCommonDataValuePointer(script_machine* machine, int argc, const value* argv) {
+	StgControlScript* script = rcast(StgControlScript*, machine->data);
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	int64_t val = argv[0].as_int();
+	auto cdPtr = ScriptCommonData_Pointer::From((uint64_t&)val);
+
+	return script->CreateBooleanValue(cdPtr.has_value());
+}
+
+// Common data save/load
 gstd::value StgControlScript::Func_SaveCommonDataAreaA1(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgSystemInformation> infoSystem = script->systemController_->GetSystemInformation();
+	auto infoSystem = script->systemController_->GetSystemInformation();
 
-	std::wstring area = argv[0].as_string();
-	std::string sArea = StringUtility::ConvertWideToMulti(area);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	std::wstring nameAreaW = argv[0].as_string();
+	std::string nameArea = STR_MULTI(nameAreaW);
 
 	bool res = false;
 
-	shared_ptr<ScriptCommonData> commonData = commonDataManager->GetData(sArea);
-	if (commonData) {
+	if (auto area = commonDataManager->GetArea(nameArea)) {
 		const std::wstring& pathMain = infoSystem->GetMainScriptInformation()->pathScript_;
-		std::wstring pathSave = EPathProperty::GetCommonDataPath(pathMain, area);
+
+		std::wstring pathSave = EPathProperty::GetCommonDataPath(pathMain, nameAreaW);
 		std::wstring dirSave = PathProperty::GetFileDirectory(pathSave);
 
 		File::CreateFileDirectory(dirSave);
 
 		RecordBuffer record;
-		commonData->WriteRecord(record);
-		res = record.WriteToFile(pathSave, GAME_VERSION_NUM, 
-			ScriptCommonData::HEADER_SAVED_DATA, ScriptCommonData::HEADER_SAVED_DATA_SIZE);
+		area->WriteRecord(record);
+		res = record.WriteToFile(pathSave, DATA_VERSION_CAREA,
+			ScriptCommonDataArea::HEADER_SAVED_DATA, 
+			ScriptCommonDataArea::HEADER_SAVED_DATA_SIZE);
 	}
 
 	return script->CreateBooleanValue(res);
 }
 gstd::value StgControlScript::Func_LoadCommonDataAreaA1(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgSystemInformation> infoSystem = script->systemController_->GetSystemInformation();
+	auto infoSystem = script->systemController_->GetSystemInformation();
 
-	std::wstring area = argv[0].as_string();
-	std::string sArea = StringUtility::ConvertWideToMulti(area);
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	std::wstring nameAreaW = argv[0].as_string();
+	std::string nameArea = STR_MULTI(nameAreaW);
 
 	bool res = false;
 
 	const std::wstring& pathMain = infoSystem->GetMainScriptInformation()->pathScript_;
-	std::wstring pathSave = EPathProperty::GetCommonDataPath(pathMain, area);
+	std::wstring pathSave = EPathProperty::GetCommonDataPath(pathMain, nameAreaW);
 
 	RecordBuffer record;
-	res = record.ReadFromFile(pathSave, GAME_VERSION_NUM, 
-		ScriptCommonData::HEADER_SAVED_DATA, ScriptCommonData::HEADER_SAVED_DATA_SIZE);
+	res = record.ReadFromFile(pathSave, DATA_VERSION_CAREA,
+		ScriptCommonDataArea::HEADER_SAVED_DATA, 
+		ScriptCommonDataArea::HEADER_SAVED_DATA_SIZE);
 	if (res) {
-		shared_ptr<ScriptCommonData> commonData(new ScriptCommonData());
+		auto commonData = make_unique<ScriptCommonDataArea>();
 		commonData->ReadRecord(record);
-		commonDataManager->SetData(sArea, commonData);
+
+		commonDataManager->SetArea(nameArea, MOVE(commonData));
 	}
 
 	return script->CreateBooleanValue(res);
@@ -247,45 +549,48 @@ gstd::value StgControlScript::Func_LoadCommonDataAreaA1(gstd::script_machine* ma
 
 gstd::value StgControlScript::Func_SaveCommonDataAreaA2(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgSystemInformation> infoSystem = script->systemController_->GetSystemInformation();
+	auto infoSystem = script->systemController_->GetSystemInformation();
 
-	std::string area = StringUtility::ConvertWideToMulti(argv[0].as_string());
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	std::string nameArea = STR_MULTI(argv[0].as_string());
+	std::wstring pathSave = argv[1].as_string();
 
 	bool res = false;
 
-	shared_ptr<ScriptCommonData> commonData = commonDataManager->GetData(area);
-	if (commonData) {
-		std::wstring pathSave = argv[1].as_string();
+	if (auto area = commonDataManager->GetArea(nameArea)) {
 		std::wstring dirSave = PathProperty::GetFileDirectory(pathSave);
-
 		File::CreateFileDirectory(dirSave);
 
 		RecordBuffer record;
-		commonData->WriteRecord(record);
-		res = record.WriteToFile(pathSave, GAME_VERSION_NUM, 
-			ScriptCommonData::HEADER_SAVED_DATA, ScriptCommonData::HEADER_SAVED_DATA_SIZE);
+		area->WriteRecord(record);
+		res = record.WriteToFile(pathSave, DATA_VERSION_CAREA,
+			ScriptCommonDataArea::HEADER_SAVED_DATA, 
+			ScriptCommonDataArea::HEADER_SAVED_DATA_SIZE);
 	}
 
 	return script->CreateBooleanValue(res);
 }
 gstd::value StgControlScript::Func_LoadCommonDataAreaA2(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgSystemInformation> infoSystem = script->systemController_->GetSystemInformation();
+	auto infoSystem = script->systemController_->GetSystemInformation();
 
-	std::string area = StringUtility::ConvertWideToMulti(argv[0].as_string());
-	ScriptCommonDataManager* commonDataManager = ScriptCommonDataManager::GetInstance();
+	auto commonDataManager = script->systemController_->GetCommonDataManager();
+
+	std::string nameArea = STR_MULTI(argv[0].as_string());
+	std::wstring pathSave = argv[1].as_string();
 
 	bool res = false;
-
-	std::wstring pathSave = argv[1].as_string();
+	
 	RecordBuffer record;
-	res = record.ReadFromFile(pathSave, GAME_VERSION_NUM, 
-		ScriptCommonData::HEADER_SAVED_DATA, ScriptCommonData::HEADER_SAVED_DATA_SIZE);
+	res = record.ReadFromFile(pathSave, DATA_VERSION_CAREA,
+		ScriptCommonDataArea::HEADER_SAVED_DATA, 
+		ScriptCommonDataArea::HEADER_SAVED_DATA_SIZE);
 	if (res) {
-		shared_ptr<ScriptCommonData> commonData(new ScriptCommonData());
+		auto commonData = make_unique<ScriptCommonDataArea>();
 		commonData->ReadRecord(record);
-		commonDataManager->SetData(area, commonData);
+
+		commonDataManager->SetArea(nameArea, MOVE(commonData));
 	}
 
 	return script->CreateBooleanValue(res);
@@ -300,15 +605,15 @@ gstd::value StgControlScript::Func_AddVirtualKey(gstd::script_machine* machine, 
 	int16_t key = argv[1].as_int();
 	int16_t padButton = argv[2].as_int();
 
-	ref_count_ptr<VirtualKey> vkey = new VirtualKey(key, padIndex, padButton);
+	ref_count_ptr<VirtualKey> vkey(new VirtualKey(key, padIndex, padButton));
 	input->AddKeyMap(id, vkey);
 
 	return value();
 }
 gstd::value StgControlScript::Func_AddReplayTargetVirtualKey(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgSystemInformation> infoSystem = script->systemController_->GetSystemInformation();
-	shared_ptr<StgStageController> stageController = script->systemController_->GetStageController();
+	auto infoSystem = script->systemController_->GetSystemInformation();
+	StgStageController* stageController = script->systemController_->GetStageController();
 
 	int16_t id = argv[0].as_int();
 	infoSystem->AddReplayTargetKey(id);
@@ -332,7 +637,7 @@ gstd::value StgControlScript::Func_StgStageInformation_int64_void(gstd::script_m
 
 	int64_t res = 0;
 
-	shared_ptr<StgStageController> stageController = script->systemController_->GetStageController();
+	StgStageController* stageController = script->systemController_->GetStageController();
 	if (stageController) {
 		auto stgInfo = stageController->GetStageInformation().get();
 		res = (stgInfo->*Func)();
@@ -344,7 +649,7 @@ template<void(StgStageInformation::* Func)(int64_t)>
 gstd::value StgControlScript::Func_StgStageInformation_void_int64(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
 
-	shared_ptr<StgStageController> stageController = script->systemController_->GetStageController();
+	StgStageController* stageController = script->systemController_->GetStageController();
 	if (stageController) {
 		int64_t inc = argv[0].as_int();
 		auto stgInfo = stageController->GetStageInformation().get();
@@ -359,7 +664,7 @@ gstd::value StgControlScript::Func_IsReplay(gstd::script_machine* machine, int a
 
 	bool res = false;
 
-	shared_ptr<StgStageController> stageController = script->systemController_->GetStageController();
+	StgStageController* stageController = script->systemController_->GetStageController();
 	if (stageController)
 		res = stageController->GetStageInformation()->IsReplay();
 
@@ -379,7 +684,7 @@ gstd::value StgControlScript::Func_GetArchiveFilePathList(gstd::script_machine* 
 	std::wstring name = argv[0].as_string();
 	bool bExtendPath = argv[1].as_boolean();
 
-	shared_ptr<ArchiveFile> archive = fileManager->GetArchiveFile(name);
+	ArchiveFile* archive = fileManager->GetArchiveFile(name);
 	if (archive) {
 		std::wstring archiveBaseDir = PathProperty::GetFileDirectory(archive->GetPath());
 
@@ -414,7 +719,7 @@ gstd::value StgControlScript::Func_GetStageTime(gstd::script_machine* machine, i
 
 	uint64_t res = 0;
 
-	shared_ptr<StgStageController> stageController = script->systemController_->GetStageController();
+	StgStageController* stageController = script->systemController_->GetStageController();
 	if (stageController) {
 		ref_count_ptr<StgStageInformation> infoStage = stageController->GetStageInformation();
 
@@ -430,7 +735,7 @@ gstd::value StgControlScript::Func_GetStageTimeF(gstd::script_machine* machine, 
 
 	DWORD res = 0;
 
-	shared_ptr<StgStageController> stageController = script->systemController_->GetStageController();
+	StgStageController* stageController = script->systemController_->GetStageController();
 	if (stageController) {
 		ref_count_ptr<StgStageInformation> infoStage = stageController->GetStageInformation();
 		res = infoStage->GetCurrentFrame();
@@ -457,7 +762,7 @@ gstd::value StgControlScript::Func_GetPackageTime(gstd::script_machine* machine,
 
 gstd::value StgControlScript::Func_GetStgFrameLeft(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	shared_ptr<StgStageController> stageController = script->systemController_->GetStageController();
+	StgStageController* stageController = script->systemController_->GetStageController();
 
 	LONG res = 0;
 	if (stageController)
@@ -467,7 +772,7 @@ gstd::value StgControlScript::Func_GetStgFrameLeft(gstd::script_machine* machine
 }
 gstd::value StgControlScript::Func_GetStgFrameTop(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	shared_ptr<StgStageController> stageController = script->systemController_->GetStageController();
+	StgStageController* stageController = script->systemController_->GetStageController();
 
 	LONG res = 0;
 	if (stageController)
@@ -477,7 +782,7 @@ gstd::value StgControlScript::Func_GetStgFrameTop(gstd::script_machine* machine,
 }
 gstd::value StgControlScript::Func_GetStgFrameWidth(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	shared_ptr<StgStageController> stageController = script->systemController_->GetStageController();
+	StgStageController* stageController = script->systemController_->GetStageController();
 
 	LONG res = 0;
 	if (stageController) {
@@ -489,7 +794,7 @@ gstd::value StgControlScript::Func_GetStgFrameWidth(gstd::script_machine* machin
 }
 gstd::value StgControlScript::Func_GetStgFrameHeight(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	shared_ptr<StgStageController> stageController = script->systemController_->GetStageController();
+	StgStageController* stageController = script->systemController_->GetStageController();
 
 	LONG res = 0;
 	if (stageController) {
@@ -524,9 +829,8 @@ gstd::value StgControlScript::Func_GetScriptPathList(gstd::script_machine* machi
 	for (auto itr = listFile.begin(); itr != listFile.end(); ++itr) {
 		std::wstring path = *itr;
 
-		//明らかに関係なさそうな拡張子は除外
 		std::wstring ext = PathProperty::GetFileExtension(path);
-		if (ScriptInformation::IsExcludeExtention(ext)) continue;
+		if (ScriptInformation::IsExcludeExtension(ext)) continue;
 
 		path = PathProperty::GetUnique(path);
 		ref_count_ptr<ScriptInformation> infoScript = ScriptInformation::CreateScriptInformation(path, true);
@@ -546,6 +850,7 @@ gstd::value StgControlScript::Func_GetScriptInfoA1(gstd::script_machine* machine
 	int type = argv[1].as_int();
 
 	ref_count_ptr<ScriptInformation> infoScript = nullptr;
+
 	auto itr = script->mapScriptInfo_.find(path);
 	if (itr != script->mapScriptInfo_.end())
 		infoScript = itr->second;
@@ -646,7 +951,7 @@ value StgControlScript::Func_IsWindowFocused(gstd::script_machine* machine, int 
 gstd::value StgControlScript::Func_ClearInvalidRenderPriority(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
 	StgSystemController* systemController = script->systemController_;
-	ref_count_ptr<StgSystemInformation> infoSystem = systemController->GetSystemInformation();
+	auto infoSystem = systemController->GetSystemInformation();
 
 	infoSystem->SetInvalidRenderPriority(-1, -1);
 
@@ -655,7 +960,7 @@ gstd::value StgControlScript::Func_ClearInvalidRenderPriority(gstd::script_machi
 gstd::value StgControlScript::Func_SetInvalidRenderPriorityA1(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
 	StgSystemController* systemController = script->systemController_;
-	ref_count_ptr<StgSystemInformation> infoSystem = systemController->GetSystemInformation();
+	auto infoSystem = systemController->GetSystemInformation();
 
 	int priMin = argv[0].as_int();
 	int priMax = argv[1].as_int();
@@ -684,7 +989,7 @@ shared_ptr<Texture> _RenderToTexture_LoadTexture(DxScriptResourceCache* rsrcCach
 			bool bExist = false;
 			auto itrData = textureManager->IsDataExistsItr(name, &bExist);
 			if (bExist) {	//Texture data exists, create a new texture object
-				texture = std::make_shared<Texture>();
+				texture = make_shared<Texture>();
 				texture->CreateFromData(itrData->second);
 				textureManager->Add(name, texture);
 			}
@@ -822,7 +1127,7 @@ gstd::value StgControlScript::Func_GetPlayerID(gstd::script_machine* machine, in
 
 	std::wstring id = L"";
 
-	shared_ptr<StgStageController> stageController = script->systemController_->GetStageController();
+	StgStageController* stageController = script->systemController_->GetStageController();
 	if (stageController)
 		id = stageController->GetStageInformation()->GetPlayerScriptInformation()->id_;
 
@@ -833,7 +1138,7 @@ gstd::value StgControlScript::Func_GetPlayerReplayName(gstd::script_machine* mac
 
 	std::wstring replayName = L"";
 
-	shared_ptr<StgStageController> stageController = script->systemController_->GetStageController();
+	StgStageController* stageController = script->systemController_->GetStageController();
 	if (stageController)
 		replayName = stageController->GetStageInformation()->GetPlayerScriptInformation()->replayName_;
 
@@ -843,7 +1148,7 @@ gstd::value StgControlScript::Func_GetPlayerReplayName(gstd::script_machine* mac
 //STG制御共通関数：ユーザスクリプト
 gstd::value StgControlScript::Func_SetPauseScriptPath(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgSystemInformation> info = script->systemController_->GetSystemInformation();
+	auto info = script->systemController_->GetSystemInformation();
 
 	std::wstring path = argv[0].as_string();
 	info->SetPauseScriptPath(path);
@@ -852,7 +1157,7 @@ gstd::value StgControlScript::Func_SetPauseScriptPath(gstd::script_machine* mach
 }
 gstd::value StgControlScript::Func_SetEndSceneScriptPath(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgSystemInformation> info = script->systemController_->GetSystemInformation();
+	auto info = script->systemController_->GetSystemInformation();
 
 	std::wstring path = argv[0].as_string();
 	info->SetEndSceneScriptPath(path);
@@ -861,7 +1166,7 @@ gstd::value StgControlScript::Func_SetEndSceneScriptPath(gstd::script_machine* m
 }
 gstd::value StgControlScript::Func_SetReplaySaveSceneScriptPath(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgSystemInformation> info = script->systemController_->GetSystemInformation();
+	auto info = script->systemController_->GetSystemInformation();
 
 	std::wstring path = argv[0].as_string();
 	info->SetReplaySaveSceneScriptPath(path);
@@ -872,7 +1177,7 @@ gstd::value StgControlScript::Func_SetReplaySaveSceneScriptPath(gstd::script_mac
 //STG制御共通関数：自機スクリプト
 gstd::value StgControlScript::Func_GetLoadFreePlayerScriptList(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgControlScriptInformation> infoControlScript = script->systemController_->GetControlScriptInformation();
+	StgControlScriptInformation* infoControlScript = script->systemController_->GetControlScriptInformation();
 
 	infoControlScript->LoadFreePlayerList();
 	std::vector<ref_count_ptr<ScriptInformation>>& listFreePlayer = infoControlScript->GetFreePlayerList();
@@ -881,7 +1186,7 @@ gstd::value StgControlScript::Func_GetLoadFreePlayerScriptList(gstd::script_mach
 }
 gstd::value StgControlScript::Func_GetFreePlayerScriptCount(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgControlScriptInformation> infoControlScript = script->systemController_->GetControlScriptInformation();
+	StgControlScriptInformation* infoControlScript = script->systemController_->GetControlScriptInformation();
 
 	std::vector<ref_count_ptr<ScriptInformation>>& listFreePlayer = infoControlScript->GetFreePlayerList();
 
@@ -889,7 +1194,7 @@ gstd::value StgControlScript::Func_GetFreePlayerScriptCount(gstd::script_machine
 }
 gstd::value StgControlScript::Func_GetFreePlayerScriptInfo(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgControlScriptInformation> infoControlScript = script->systemController_->GetControlScriptInformation();
+	StgControlScriptInformation* infoControlScript = script->systemController_->GetControlScriptInformation();
 
 	std::vector<ref_count_ptr<ScriptInformation>>& listFreePlayer = infoControlScript->GetFreePlayerList();
 
@@ -927,8 +1232,9 @@ gstd::value StgControlScript::Func_GetFreePlayerScriptInfo(gstd::script_machine*
 //STG制御共通関数：リプレイ関連
 gstd::value StgControlScript::Func_LoadReplayList(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgControlScriptInformation> infoControlScript = script->systemController_->GetControlScriptInformation();
-	ref_count_ptr<StgSystemInformation> infoSystem = script->systemController_->GetSystemInformation();
+
+	StgControlScriptInformation* infoControlScript = script->systemController_->GetControlScriptInformation();
+	auto infoSystem = script->systemController_->GetSystemInformation();
 
 	std::wstring& pathMainScript = infoSystem->GetMainScriptInformation()->pathScript_;
 	infoControlScript->LoadReplayInformation(pathMainScript);
@@ -937,7 +1243,8 @@ gstd::value StgControlScript::Func_LoadReplayList(gstd::script_machine* machine,
 }
 gstd::value StgControlScript::Func_GetValidReplayIndices(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgControlScriptInformation> infoControlScript = script->systemController_->GetControlScriptInformation();
+
+	StgControlScriptInformation* infoControlScript = script->systemController_->GetControlScriptInformation();
 	ref_count_ptr<ReplayInformationManager> replayInfoManager = infoControlScript->GetReplayInformationManager();
 
 	std::vector<int> listValidIndices = replayInfoManager->GetIndexList();
@@ -945,7 +1252,8 @@ gstd::value StgControlScript::Func_GetValidReplayIndices(gstd::script_machine* m
 }
 gstd::value StgControlScript::Func_IsValidReplayIndex(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgControlScriptInformation> infoControlScript = script->systemController_->GetControlScriptInformation();
+
+	StgControlScriptInformation* infoControlScript = script->systemController_->GetControlScriptInformation();
 	ref_count_ptr<ReplayInformationManager> replayInfoManager = infoControlScript->GetReplayInformationManager();
 
 	int index = argv[0].as_int();
@@ -953,9 +1261,11 @@ gstd::value StgControlScript::Func_IsValidReplayIndex(gstd::script_machine* mach
 }
 gstd::value StgControlScript::Func_GetReplayInfo(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgControlScriptInformation> infoControlScript = script->systemController_->GetControlScriptInformation();
+
+	StgControlScriptInformation* infoControlScript = script->systemController_->GetControlScriptInformation();
+	auto infoSystem = script->systemController_->GetSystemInformation();
+
 	ref_count_ptr<ReplayInformationManager> replayInfoManager = infoControlScript->GetReplayInformationManager();
-	ref_count_ptr<StgSystemInformation> infoSystem = script->systemController_->GetSystemInformation();
 
 	int index = argv[0].as_int();
 	int type = argv[1].as_int();
@@ -1022,9 +1332,12 @@ gstd::value StgControlScript::Func_GetReplayInfo(gstd::script_machine* machine, 
 }
 gstd::value StgControlScript::Func_SetReplayInfo(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgControlScriptInformation> infoControlScript = script->systemController_->GetControlScriptInformation();
+
+	StgControlScriptInformation* infoControlScript = script->systemController_->GetControlScriptInformation();
+	auto infoSystem = script->systemController_->GetSystemInformation();
+
 	ref_count_ptr<ReplayInformationManager> replayInfoManager = infoControlScript->GetReplayInformationManager();
-	ref_count_ptr<StgSystemInformation> infoSystem = script->systemController_->GetSystemInformation();
+
 	ref_count_ptr<ReplayInformation> replayInfo = infoSystem->GetActiveReplayInformation();
 	if (replayInfo == nullptr)
 		script->RaiseError("Cannot find a target replay data.");
@@ -1041,9 +1354,11 @@ gstd::value StgControlScript::Func_SetReplayInfo(gstd::script_machine* machine, 
 }
 gstd::value StgControlScript::Func_GetReplayUserData(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgControlScriptInformation> infoControlScript = script->systemController_->GetControlScriptInformation();
+
+	StgControlScriptInformation* infoControlScript = script->systemController_->GetControlScriptInformation();
+	auto infoSystem = script->systemController_->GetSystemInformation();
+
 	ref_count_ptr<ReplayInformationManager> replayInfoManager = infoControlScript->GetReplayInformationManager();
-	ref_count_ptr<StgSystemInformation> infoSystem = script->systemController_->GetSystemInformation();
 
 	int index = argv[0].as_int();
 	std::string key = StringUtility::ConvertWideToMulti(argv[1].as_string());
@@ -1059,9 +1374,12 @@ gstd::value StgControlScript::Func_GetReplayUserData(gstd::script_machine* machi
 }
 gstd::value StgControlScript::Func_SetReplayUserData(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgControlScriptInformation> infoControlScript = script->systemController_->GetControlScriptInformation();
+
+	StgControlScriptInformation* infoControlScript = script->systemController_->GetControlScriptInformation();
+	auto infoSystem = script->systemController_->GetSystemInformation();
+
 	ref_count_ptr<ReplayInformationManager> replayInfoManager = infoControlScript->GetReplayInformationManager();
-	ref_count_ptr<StgSystemInformation> infoSystem = script->systemController_->GetSystemInformation();
+
 	ref_count_ptr<ReplayInformation> replayInfo = infoSystem->GetActiveReplayInformation();
 	if (replayInfo == nullptr)
 		script->RaiseError("The replay data is not found.");
@@ -1074,9 +1392,11 @@ gstd::value StgControlScript::Func_SetReplayUserData(gstd::script_machine* machi
 }
 gstd::value StgControlScript::Func_IsReplayUserDataExists(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgControlScriptInformation> infoControlScript = script->systemController_->GetControlScriptInformation();
+
+	StgControlScriptInformation* infoControlScript = script->systemController_->GetControlScriptInformation();
+	auto infoSystem = script->systemController_->GetSystemInformation();
+
 	ref_count_ptr<ReplayInformationManager> replayInfoManager = infoControlScript->GetReplayInformationManager();
-	ref_count_ptr<StgSystemInformation> infoSystem = script->systemController_->GetSystemInformation();
 
 	int index = argv[0].as_int();
 	std::string key = StringUtility::ConvertWideToMulti(argv[1].as_string());
@@ -1093,8 +1413,9 @@ gstd::value StgControlScript::Func_IsReplayUserDataExists(gstd::script_machine* 
 
 gstd::value StgControlScript::Func_SaveReplay(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	StgControlScript* script = (StgControlScript*)machine->data;
-	ref_count_ptr<StgSystemInformation> infoSystem = script->systemController_->GetSystemInformation();
-	ref_count_ptr<ScriptInformation> infoMain = script->systemController_->GetSystemInformation()->GetMainScriptInformation();
+
+	auto infoSystem = script->systemController_->GetSystemInformation();
+	auto infoMain = script->systemController_->GetSystemInformation()->GetMainScriptInformation();
 
 	ref_count_ptr<ReplayInformation> replayInfoActive = infoSystem->GetActiveReplayInformation();
 	if (replayInfoActive == nullptr)
@@ -1116,283 +1437,490 @@ gstd::value StgControlScript::Func_SaveReplay(gstd::script_machine* machine, int
 //ScriptInfoPanel
 //*******************************************************************
 ScriptInfoPanel::ScriptInfoPanel() {
-}
-ScriptInfoPanel::~ScriptInfoPanel() {
-}
-bool ScriptInfoPanel::_AddedLogger(HWND hTab) {
-	Create(hTab);
-
-	gstd::WButton::Style buttonStyle;
-	buttonStyle.SetStyle(WS_CHILD | WS_VISIBLE | BS_FLAT | 
-		BS_PUSHBUTTON | BS_TEXT);
-	buttonTerminateAllScript_.Create(hWnd_, buttonStyle);
-	buttonTerminateAllScript_.SetText(L"Terminate All Scripts");
-	buttonTerminateSingleScript_.Create(hWnd_, buttonStyle);
-	buttonTerminateSingleScript_.SetText(L"Terminate Selected Script");
-
-	gstd::WListView::Style styleListView;
-	styleListView.SetStyle(WS_CHILD | WS_VISIBLE |
-		LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL | LVS_NOSORTHEADER);
-	styleListView.SetStyleEx(WS_EX_CLIENTEDGE);
-	styleListView.SetListViewStyleEx(LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
-
-	wndManager_.Create(hWnd_, styleListView);
-	wndManager_.AddColumn(64, 0, L"Address");
-	wndManager_.AddColumn(64, 1, L"Thread ID");
-	wndManager_.AddColumn(96, 2, L"Scripts Running");
-	wndManager_.AddColumn(96, 3, L"Scripts Loaded");
-
-	wndCache_.Create(hWnd_, styleListView);
-	wndCache_.AddColumn(40, 0, L"Uses");
-	wndCache_.AddColumn(128, 1, L"Cached Script");
-	wndCache_.AddColumn(448, 2, L"Full Path");
-
-	wndScript_.Create(hWnd_, styleListView);
-	wndScript_.AddColumn(64, 0, L"Address");
-	wndScript_.AddColumn(32, 1, L"ID");
-	wndScript_.AddColumn(60, 2, L"Type");
-	wndScript_.AddColumn(224, 3, L"Name");
-	wndScript_.AddColumn(64, 4, L"Status");
-	wndScript_.AddColumn(80, 5, L"Task Count");
-	wndScript_.AddColumn(80, 6, L"CPU Time (μs)");
-
-	wndSplitter_.Create(hWnd_, WSplitter::TYPE_HORIZONTAL);
-	wndSplitter_.SetRatioY(0.5f);
-
-	wndSplitter2_.Create(hWnd_, WSplitter::TYPE_VERTICAL);
-	wndSplitter2_.SetRatioX(0.45f);
-
-	SetWindowVisible(false);
-	PanelInitialize();
-
-	return true;
-}
-void ScriptInfoPanel::LocateParts() {
-	int wx = GetClientX();
-	int wy = GetClientY();
-	int wWidth = GetClientWidth();
-	int wHeight = GetClientHeight();
-
-	int xButton1 = wx + 16;
-	int yButton1 = wy + 8;
-	int wButton1 = 144;
-	int hButton1 = 32;
-
-	int xButton2 = xButton1 + wButton1 + 16;
-
-	buttonTerminateAllScript_.SetBounds(xButton1, yButton1, wButton1, hButton1);
-	buttonTerminateSingleScript_.SetBounds(xButton2, yButton1, wButton1, hButton1);
-
-	int yManager = xButton1 + hButton1 + 8;
-
-	int yLowerSec = (int)(wHeight * wndSplitter_.GetRatioY());
-	int wSplitter = 4;
-	int hSplitter = 6;
-
-	int wManager = wWidth * wndSplitter2_.GetRatioX();
-	int hManager = yLowerSec - yManager;
-
-	int xRightSec = wx + wManager;
-	int xCache = xRightSec + wSplitter;
-
-	wndManager_.SetBounds(wx, yManager, wManager, hManager);
-	wndSplitter2_.SetBounds(xRightSec, yManager, wSplitter, hManager);
-	wndCache_.SetBounds(xCache, yManager, wWidth - xCache, hManager);
-
-	wndSplitter_.SetBounds(wx, yLowerSec, wWidth, hSplitter);
-
-	int yScriptList = yLowerSec + hSplitter;
-	int wScriptList = 64 + 32 + 192 + 64 + 82 + 16;
-	int hScriptList = wHeight - yScriptList;
-
-	wndScript_.SetBounds(wx, yScriptList, wWidth, hScriptList);
+	selectedManagerAddr_ = 0;
+	selectedScriptAddr_ = 0;
 }
 
-void ScriptInfoPanel::_TerminateScriptAll() {
+void ScriptInfoPanel::Initialize(const std::string& name) {
+	ILoggerPanel::Initialize(name);
+}
+
+void ScriptInfoPanel::Update() {
+	listCachedScript_.clear();
+	listManager_.clear();
+
 	ETaskManager* taskManager = ETaskManager::GetInstance();
-	std::list<shared_ptr<TaskBase>>& listTask = taskManager->GetTaskList();
-	for (auto itr = listTask.begin(); itr != listTask.end(); ++itr) {
-		StgSystemController* systemController = dynamic_cast<StgSystemController*>(itr->get());
-		if (systemController)
-			systemController->TerminateScriptAll();
+	if (taskManager == nullptr) {
+		return;
+	}
+
+	{
+		Lock lock(Logger::GetTop()->GetLock());
+
+		std::list<shared_ptr<TaskBase>>& listTask = taskManager->GetTaskList();
+
+		for (auto& task : listTask) {
+			if (auto& systemController = dptr_cast(StgSystemController, task)) {
+				{
+					auto& pCacheMap = systemController->GetScriptEngineCache()->GetMap();
+
+					for (auto& [path, pCacheData] : pCacheMap) {
+						std::wstring pathShort = PathProperty::ReduceModuleDirectory(
+							pCacheData->GetPath());
+
+						auto displayData = CacheDisplay {
+							pCacheData.get(),
+							STR_MULTI(PathProperty::GetFileName(pathShort)),
+							STR_MULTI(pathShort),
+						};
+						listCachedScript_.push_back(MOVE(displayData));
+					}
+				}
+
+				{
+					std::set<shared_ptr<ScriptManager>> scriptManagersAll;
+
+					auto scriptManagers = systemController->GetScriptManagers();
+					for (auto& wManager : scriptManagers) {
+						if (auto manager = wManager.lock()) {
+							scriptManagersAll.insert(manager);
+
+							for (auto& wManagerRelative : manager->GetRelativeManagerList()) {
+								if (!wManagerRelative.expired())
+									scriptManagersAll.insert(wManagerRelative.lock());
+							}
+						}
+					}
+
+					for (auto& manager : scriptManagersAll) {
+						auto managerData = ManagerDisplay(manager);
+						listManager_.push_back(MOVE(managerData));
+					}
+				}
+
+				break;
+			}
+		}
 	}
 }
+void ScriptInfoPanel::ProcessGui() {
+	Logger* parent = Logger::GetTop();
 
-const wchar_t* ScriptInfoPanel::GetScriptTypeName(ManagedScript* script) {
-	if (script == nullptr) return L"Null";
+	auto font15 = parent->GetFont("Arial15");
+
+	float ht = ImGui::GetContentRegionAvail().y - 32;
+
+	if (ImGui::BeginChild("pscript_child_table", ImVec2(0, ht), false, ImGuiWindowFlags_HorizontalScrollbar)) {
+
+#define _SETCOL(_i, _s) ImGui::TableSetColumnIndex(_i); ImGui::TextUnformatted((_s).c_str());
+
+		ImGuiTabBarFlags tab_bar_flags = ImGuiTabBarFlags_NoCloseWithMiddleMouseButton;
+		if (ImGui::BeginTabBar("pscript_tabs", tab_bar_flags)) {
+			if (ImGui::BeginTabItem("Scripts")) {
+				ImGui::Dummy(ImVec2(0, 2));
+
+				if (ImGui::Button("Terminate All Scripts", ImVec2(160, 28))) {
+					_TerminateScriptAll();
+				}
+				ImGui::SameLine();
+
+				weak_ptr<ManagedScript> selectedScript = {};
+				ManagerDisplay* selectedManager = nullptr;
+
+				{
+					{
+						auto itrFind = std::find_if(listManager_.begin(), listManager_.end(),
+							[&](const ManagerDisplay& x) { return x.address == selectedManagerAddr_; });
+						if (itrFind != listManager_.end()) {
+							selectedManager = &*itrFind;
+
+							if (selectedScriptAddr_ != 0) {
+								auto& scripts = selectedManager->listScripts;
+
+								auto itrFindScr = std::find_if(scripts.cbegin(), scripts.cend(),
+									[&](const ScriptDisplay& x) { return x.address == selectedScriptAddr_; });
+								if (itrFindScr != scripts.cend()) {
+									selectedScript = itrFindScr->script;
+								}
+							}
+						}
+					}
+
+					directx::imgui::ImGuiExt::Disabled(selectedScript.expired(), [&]() {
+						if (ImGui::Button("Terminate Selected Script", ImVec2(200, 28))) {
+							selectedScriptAddr_ = 0;
+							_TerminateScript(selectedScript);
+						}
+					});
+				}
+
+				ImGui::Dummy(ImVec2(0, 2));
+
+				{
+					ImGuiTableFlags flags = ImGuiTableFlags_Reorderable | ImGuiTableFlags_Resizable
+						| ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoHostExtendX
+						| ImGuiTableFlags_RowBg;
+
+					float ht2 = ImGui::GetContentRegionAvail().y * 0.3;
+
+					if (ImGui::BeginTable("pscript_table_manager", 4, flags, ImVec2(0, ht2))) {
+						ImGui::TableSetupScrollFreeze(0, 1);
+
+						constexpr auto colFlags = ImGuiTableColumnFlags_WidthStretch;
+
+						ImGui::TableSetupColumn("Address", colFlags);
+						ImGui::TableSetupColumn("Thread ID", colFlags);
+						ImGui::TableSetupColumn("Scripts Running", colFlags);
+						ImGui::TableSetupColumn("Scripts Loaded", colFlags);
+
+						ImGui::TableHeadersRow();
+
+						{
+							ImGui::PushFont(font15);
+
+							ImGuiListClipper clipper;
+							clipper.Begin(listManager_.size());
+							while (clipper.Step()) {
+								for (size_t i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+									const auto& item = listManager_[i];
+									bool selected = (selectedManagerAddr_ == item.address);
+
+									ImGui::PushID(item.address);
+									ImGui::TableNextRow();
+
+									{
+										auto strAddress = StringUtility::FromAddress(item.address);
+
+										ImGui::TableSetColumnIndex(0);
+										if (ImGui::Selectable(strAddress.c_str(), selected,
+											ImGuiSelectableFlags_SpanAllColumns))
+										{
+											selectedManagerAddr_ = item.address;
+										}
+									}
+
+									_SETCOL(1, std::to_string(item.idThread));
+									_SETCOL(2, std::to_string(item.nScriptRun));
+									_SETCOL(3, std::to_string(item.nScriptLoad));
+
+									ImGui::PopID();
+								}
+							}
+
+							ImGui::PopFont();
+						}
+
+						ImGui::EndTable();
+					}
+				}
+
+				ImGui::Separator();
+
+				{
+					ImGuiTableFlags flags = ImGuiTableFlags_Reorderable | ImGuiTableFlags_Resizable
+						| ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoHostExtendX
+						| ImGuiTableFlags_RowBg
+						| ImGuiTableFlags_Sortable;
+
+					float ht2 = ImGui::GetContentRegionAvail().y;
+
+					if (ImGui::BeginTable("pscript_table_scripts", 7, flags, ImVec2(0, ht2))) {
+						ImGui::TableSetupScrollFreeze(0, 1);
+
+						constexpr auto sortDef = ImGuiTableColumnFlags_DefaultSort,
+							sortNone = ImGuiTableColumnFlags_NoSort;
+						constexpr auto colFlags = ImGuiTableColumnFlags_WidthStretch;
+
+						ImGui::TableSetupColumn("Address", sortDef, 0, ScriptDisplay::Column::Address);
+						ImGui::TableSetupColumn("ID", sortDef, 0, ScriptDisplay::Column::Id);
+						ImGui::TableSetupColumn("Type", sortDef, 0, ScriptDisplay::Column::Type);
+						ImGui::TableSetupColumn("Name", colFlags | sortDef, 100, ScriptDisplay::Column::Path);
+						ImGui::TableSetupColumn("Status", sortDef, 0, ScriptDisplay::Column::Status);
+						ImGui::TableSetupColumn("Task Count", sortDef, 0, ScriptDisplay::Column::Task);
+						ImGui::TableSetupColumn("Time Spent (μs)", colFlags | sortDef, 60, ScriptDisplay::Column::Time);
+
+						ImGui::TableHeadersRow();
+
+						if (selectedManager != nullptr) {
+							selectedManager->LoadScripts();
+							auto& scripts = selectedManager->listScripts;
+
+							if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
+								if (specs->SpecsDirty) {
+									ScriptDisplay::imguiSortSpecs = specs;
+
+									if (scripts.size() > 1) {
+										std::sort(scripts.begin(), scripts.end(),
+											ScriptDisplay::Compare);
+									}
+
+									specs->SpecsDirty = false;
+								}
+							}
+
+							ImGui::PushFont(font15);
+
+							ImGuiListClipper clipper;
+							clipper.Begin(scripts.size());
+							while (clipper.Step()) {
+								for (size_t i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+									auto& item = scripts[i];
+									bool selected = (selectedScriptAddr_ == item.address);
+
+									ImGui::PushID(item.address);
+									ImGui::TableNextRow();
+
+									{
+										auto strAddress = StringUtility::FromAddress(item.address);
+
+										ImGui::TableSetColumnIndex(0);
+										if (ImGui::Selectable(strAddress.c_str(), selected,
+											ImGuiSelectableFlags_SpanAllColumns))
+										{
+											selectedScriptAddr_ = item.address;
+										}
+									}
+
+									_SETCOL(1, std::to_string(item.id));
+									_SETCOL(2, item.type);
+
+									_SETCOL(3, item.name);
+									if (ImGui::IsItemHovered())
+										ImGui::SetTooltip(item.name.c_str());
+
+									ImGui::TableSetColumnIndex(4);
+									ImGui::Text(GetScriptStatusStr(item.status));
+
+									_SETCOL(5, std::to_string(item.tasks));
+									_SETCOL(6, std::to_string(item.time));
+
+									ImGui::PopID();
+								}
+							}
+
+							ImGui::PopFont();
+						}
+
+						ImGui::EndTable();
+					}
+				}
+
+				ImGui::EndTabItem();
+			}
+
+			if (ImGui::BeginTabItem("Cached")) {
+				ImGui::Dummy(ImVec2(0, 2));
+
+				{
+					ImGuiTableFlags flags = ImGuiTableFlags_Reorderable | ImGuiTableFlags_Resizable
+						| ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoHostExtendX
+						| ImGuiTableFlags_RowBg;
+
+					if (ImGui::BeginTable("pscript_table_cached", 3, flags)) {
+						ImGui::TableSetupScrollFreeze(0, 1);
+
+						constexpr auto colFlags = ImGuiTableColumnFlags_WidthStretch;
+
+						ImGui::TableSetupColumn("Address", colFlags);
+						ImGui::TableSetupColumn("Name", colFlags);
+						ImGui::TableSetupColumn("Full Path", colFlags);
+
+						ImGui::TableHeadersRow();
+
+						{
+							ImGui::PushFont(font15);
+
+							ImGuiListClipper clipper;
+							clipper.Begin(listCachedScript_.size());
+							while (clipper.Step()) {
+								for (size_t i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+									const auto& item = listCachedScript_[i];
+
+									ImGui::TableNextRow();
+
+									_SETCOL(0, StringUtility::FromAddress((uintptr_t)item.script));
+									_SETCOL(1, item.name);
+
+									_SETCOL(2, item.path);
+									if (ImGui::IsItemHovered())
+										ImGui::SetTooltip(item.path.c_str());
+								}
+							}
+
+							ImGui::PopFont();
+						}
+
+						ImGui::EndTable();
+					}
+				}
+
+				ImGui::EndTabItem();
+			}
+
+			ImGui::EndTabBar();
+		}
+
+#undef _SETCOL
+	}
+	ImGui::EndChild();
+
+	ImGui::Dummy(ImVec2(0, 4));
+	ImGui::Indent(6);
+}
+
+const char* ScriptInfoPanel::GetScriptTypeName(ManagedScript* script) {
+	if (script == nullptr) 
+		return "Null";
+
 	if (dynamic_cast<StgStageScript*>(script)) {
 		switch (script->GetScriptType()) {
 		case StgStageScript::TYPE_SYSTEM:
-			return L"System";
+			return "System";
 		case StgStageScript::TYPE_STAGE:
-			return L"Stage";
+			return "Stage";
 		case StgStageScript::TYPE_PLAYER:
-			return L"Player";
+			return "Player";
 		case StgStageScript::TYPE_ITEM:
-			return L"Item";
+			return "Item";
 		case StgStageScript::TYPE_SHOT:
-			return L"Shot";
+			return "Shot";
 		}
 	}
 	else if (dynamic_cast<StgPackageScript*>(script)) {
 		switch (script->GetScriptType()) {
 		case StgPackageScript::TYPE_PACKAGE_MAIN:
-			return L"Package";
+			return "Package";
 		}
 	}
 	else if (dynamic_cast<StgUserExtendSceneScript*>(script)) {
 		switch (script->GetScriptType()) {
 		case StgUserExtendSceneScript::TYPE_PAUSE_SCENE:
-			return L"PauseScene";
+			return "PauseScene";
 		case StgUserExtendSceneScript::TYPE_END_SCENE:
-			return L"EndScene";
+			return "EndScene";
 		case StgUserExtendSceneScript::TYPE_REPLAY_SCENE:
-			return L"ReplaySaveScene";
+			return "ReplaySaveScene";
 		}
 	}
-	return L"Unknown";
+	return "Unknown";
+}
+const char* ScriptInfoPanel::GetScriptStatusStr(ScriptDisplay::ScriptStatus status) {
+	switch (status) {
+	case ScriptDisplay::ScriptStatus::Running:
+		return "Running";
+	case ScriptDisplay::ScriptStatus::Loaded:
+		return "Loaded";
+	case ScriptDisplay::ScriptStatus::Paused:
+		return "Paused";
+	case ScriptDisplay::ScriptStatus::Closing:
+		return "Closing";
+	}
+	return "";
 }
 
-void ScriptInfoPanel::PanelUpdate() {
-	if (!IsWindowVisible()) return;
+ScriptInfoPanel::ManagerDisplay::ManagerDisplay(shared_ptr<ScriptManager> manager) :
+	manager(manager), address((uintptr_t)manager.get())
+{
+	idThread = manager->GetMainThreadID();
+	nScriptRun = manager->GetRunningScriptList().size();
+	nScriptLoad = manager->GetMapScriptLoad().size();
+}
 
+void ScriptInfoPanel::ManagerDisplay::LoadScripts() {
+	if (listScripts.size() > 0)
+		return;
+
+	{
+		Lock lock(Logger::GetTop()->GetLock());
+
+		LOCK_WEAK(pManager, manager) {
+			for (auto& [sId, pScript] : pManager->GetMapScriptLoad()) {
+				listScripts.push_back(ScriptDisplay(pScript, ScriptDisplay::ScriptStatus::Loaded));
+			}
+
+			for (auto& pScript : pManager->GetRunningScriptList()) {
+				listScripts.push_back(ScriptDisplay(pScript, 
+					pScript->IsPaused() ? 
+					ScriptDisplay::ScriptStatus::Paused : 
+					ScriptDisplay::ScriptStatus::Running));
+			}
+		}
+
+		// Sort new data as well
+		if (ScriptDisplay::imguiSortSpecs) {
+			if (listScripts.size() > 1) {
+				std::sort(listScripts.begin(), listScripts.end(), ScriptDisplay::Compare);
+			}
+		}
+	}
+}
+
+ScriptInfoPanel::ScriptDisplay::ScriptDisplay(shared_ptr<ManagedScript> script, ScriptStatus status) :
+	script(script), address((uintptr_t)script.get()),
+	status(status)
+{
+	id = script->GetScriptID();
+	name = STR_MULTI(PathProperty::GetFileName(script->GetPath()));
+	tasks = script->GetThreadCount();
+	time = script->GetScriptRunTime();
+
+	type = GetScriptTypeName(script.get());
+}
+
+const ImGuiTableSortSpecs* ScriptInfoPanel::ScriptDisplay::imguiSortSpecs = nullptr;
+bool ScriptInfoPanel::ScriptDisplay::Compare(const ScriptDisplay& a, const ScriptDisplay& b) {
+	for (int i = 0; i < imguiSortSpecs->SpecsCount; ++i) {
+		const ImGuiTableColumnSortSpecs* spec = &imguiSortSpecs->Specs[i];
+
+		int rcmp = 0;
+
+#define CASE_SORT(_id, _l, _r) \
+		case _id: { \
+			if (_l != _r) rcmp = (_l < _r) ? 1 : -1; \
+			break; \
+		}
+
+		switch ((Column)spec->ColumnUserID) {
+		CASE_SORT(Column::Address, a.address, b.address);
+		CASE_SORT(Column::Id, a.id, b.id);
+		case Column::Type:
+			rcmp = a.type.compare(b.type);
+			break;
+		case Column::Path:
+			rcmp = a.name.compare(b.name);
+			break;
+		CASE_SORT(Column::Status, (int)a.status, (int)b.status);
+		CASE_SORT(Column::Task, a.tasks, b.tasks);
+		CASE_SORT(Column::Time, a.time, b.time);
+		}
+
+#undef CASE_SORT
+
+		if (rcmp != 0) {
+			return spec->SortDirection == ImGuiSortDirection_Ascending 
+				? rcmp < 0 : rcmp > 0;
+		}
+	}
+
+	return a.address < b.address;
+}
+
+void ScriptInfoPanel::_TerminateScriptAll() {
 	ETaskManager* taskManager = ETaskManager::GetInstance();
-	if (taskManager) {
-		bool bSystemAvailable = false;
-		std::list<shared_ptr<TaskBase>>& listTask = taskManager->GetTaskList();
-		for (auto itr = listTask.begin(); itr != listTask.end(); ++itr) {
-			StgSystemController* systemController = dynamic_cast<StgSystemController*>(itr->get());
-			if (systemController) {
-				Update(systemController);
-				bSystemAvailable = true;
-			}
-		}
-		if (!bSystemAvailable)
-			Update(nullptr);
-	}
-}
-void ScriptInfoPanel::Update(StgSystemController* systemController) {
-	std::vector<ScriptManager*> vecScriptManager;
-	std::list<weak_ptr<ScriptManager>> listScriptManager;
-	if (systemController)
-		systemController->GetAllScriptList(listScriptManager);
 
-	std::set<shared_ptr<ScriptManager>> setScriptManager;
-	for (auto itr = listScriptManager.begin(); itr != listScriptManager.end(); ++itr) {
-		if (auto manager = itr->lock()) {
-			setScriptManager.insert(manager);
+	std::list<shared_ptr<TaskBase>>& listTask = taskManager->GetTaskList();
 
-			std::list<weak_ptr<ScriptManager>>& listRelative = manager->GetRelativeManagerList();
-			for (auto itrRelative = listRelative.begin(); itrRelative != listRelative.end(); ++itrRelative) {
-				if (auto managerRelative = itrRelative->lock())
-					setScriptManager.insert(managerRelative);
-			}
-		}
-	}
-
-	{
-		int iCache = 0;
-		int orgRowCount = wndCache_.GetRowCount();
-
-		if (systemController) {
-			auto& pCacheMap = systemController->GetScriptEngineCache()->GetMap();
-			for (auto itr = pCacheMap.cbegin(); itr != pCacheMap.cend(); ++itr, ++iCache) {
-				const shared_ptr<ScriptEngineData>& pData = itr->second;
-
-				size_t uses = pData.use_count();
-				std::wstring path = PathProperty::GetPathWithoutModuleDirectory(pData->GetPath());
-
-				wndCache_.SetText(iCache, 0, StringUtility::Format(L"%u", uses));
-				wndCache_.SetText(iCache, 1, StringUtility::Format(L"%s", PathProperty::GetFileName(path).c_str()));
-				wndCache_.SetText(iCache, 2, StringUtility::Format(L"%s", path.c_str()));
-			}
-		}
-
-		for (int i = iCache; i < orgRowCount; ++i)
-			wndCache_.DeleteRow(i);
-	}
-
-	{
-		{
-			Lock lock(lock_);
-
-			size_t i = 0;
-			for (auto itr = setScriptManager.begin(); itr != setScriptManager.end(); ++itr, ++i) {
-				const shared_ptr<ScriptManager>& manager = *itr;
-				wndManager_.SetText(i, 0, StringUtility::Format(L"%08x", (int)manager.get()));
-				wndManager_.SetText(i, 1, StringUtility::Format(L"%d", manager->GetMainThreadID()));
-				wndManager_.SetText(i, 2, StringUtility::Format(L"%u", manager->GetRunningScriptList().size()));
-				wndManager_.SetText(i, 3, StringUtility::Format(L"%u", manager->GetMapScriptLoad().size()));
-				vecScriptManager.push_back(manager.get());
-			}
-		}
-
-		{
-			listScript_.clear();
-
-			int iScript = 0;
-			int orgRowCount = wndScript_.GetRowCount();
-			int selectedIndex = wndManager_.GetSelectedRow();
-			if (selectedIndex >= 0 && selectedIndex < vecScriptManager.size()) {
-				auto AddScript = [&](shared_ptr<ManagedScript>& script, const std::wstring& status) {
-					listScript_.push_back(script);
-					wndScript_.SetText(iScript, 0, StringUtility::Format(L"%08x", (int)script.get()));
-					wndScript_.SetText(iScript, 1, StringUtility::Format(L"%d", script->GetScriptID()));
-					wndScript_.SetText(iScript, 2, GetScriptTypeName(script.get()));
-					wndScript_.SetText(iScript, 3,
-						StringUtility::Format(L"%s", PathProperty::GetFileName(script->GetPath()).c_str()));
-					wndScript_.SetText(iScript, 4, status);
-					wndScript_.SetText(iScript, 5, StringUtility::Format(L"%u", script->GetThreadCount()));
-					wndScript_.SetText(iScript, 6, StringUtility::Format(L"%u", script->GetScriptRunTime()));
-				};
-
-				ScriptManager* manager = vecScriptManager[selectedIndex];
-				{
-					std::map<int64_t, shared_ptr<ManagedScript>>& mapLoad = manager->GetMapScriptLoad();
-					for (auto itr = mapLoad.begin(); itr != mapLoad.end(); ++itr, ++iScript)
-						AddScript(itr->second, L"Loaded");
-				}
-				{
-					std::list<shared_ptr<ManagedScript>>& listRun = manager->GetRunningScriptList();
-					for (auto itr = listRun.begin(); itr != listRun.end(); ++itr, ++iScript) {
-						shared_ptr<ManagedScript>& script = *itr;
-						AddScript(script, script->IsPaused() ? L"Paused" : L"Running");
-					}
-				}
-			}
-
-			for (int i = iScript; i < orgRowCount; ++i)
-				wndScript_.DeleteRow(i);
+	for (auto& task : listTask) {
+		if (auto& systemController = dptr_cast(StgSystemController, task)) {
+			systemController->TerminateScriptAll();
+			break;
 		}
 	}
 }
-
-LRESULT ScriptInfoPanel::_WindowProcedure(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-	switch (uMsg) {
-	case WM_SIZE:
-	{
-		LocateParts();
-		break;
+void ScriptInfoPanel::_TerminateScript(weak_ptr<ManagedScript> wScript) {
+	if (auto script = wScript.lock()) {
+		if (auto manager = script->GetScriptManager())
+			manager->CloseScript(script);
 	}
-	case WM_COMMAND:
-	{
-		int id = wParam & 0xffff;
-		if (id == buttonTerminateAllScript_.GetWindowId()) {
-			_TerminateScriptAll();
-			return FALSE;
-		}
-		else if (id == buttonTerminateSingleScript_.GetWindowId()) {
-			int selectedIndex = wndScript_.GetSelectedRow();
-			if (selectedIndex >= 0 && selectedIndex < listScript_.size()) {
-				auto itr = std::next(listScript_.begin(), selectedIndex);
-				if (auto script = itr->lock()) {
-					ScriptManager* manager = script->GetScriptManager();
-					if (manager) manager->CloseScript(script);
-				}
-			}
-			return TRUE;
-		}
-	}
-	}
-	return _CallPreviousWindowProcedure(hWnd, uMsg, wParam, lParam);
 }
+

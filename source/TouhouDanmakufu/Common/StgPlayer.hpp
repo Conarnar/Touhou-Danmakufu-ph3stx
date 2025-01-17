@@ -105,7 +105,7 @@ public:
 	virtual void SetY(double y) { StgMoveObject::SetPositionY(y); DxScriptRenderObject::SetY(y); }
 
 	ref_count_ptr<StgPlayerInformation> GetPlayerInformation() { return infoPlayer_; }
-	void SetPlayerInforamtion(ref_count_ptr<StgPlayerInformation> info) { infoPlayer_ = info; }
+	void SetPlayerInformation(ref_count_ptr<StgPlayerInformation> info) { infoPlayer_ = info; }
 	ref_unsync_ptr<StgPlayerSpellManageObject> GetSpellManageObject() { return objSpell_; }
 
 	StgStagePlayerScript* GetPlayerScript() { return script_; }

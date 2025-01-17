@@ -19,7 +19,7 @@ namespace gstd {
 		};
 
 		char magic[MAGIC_LENGTH];
-		uint64_t version;
+		uint32_t version;
 		uint32_t entryCount;
 		//uint8_t headerCompressed;
 		uint32_t headerOffset;
@@ -41,9 +41,17 @@ namespace gstd {
 		byte keyBase;
 		byte keyStep;
 
-		//Not stored into archive files, only for engine usage
-		ArchiveFile* archiveParent;
-		std::wstring fullPath;	//Without module dir
+		ArchiveFileEntry() :
+			compressionType(CT_NONE), 
+			sizeFull(0), sizeStored(0), offsetPos(0), 
+			keyBase(0), keyStep(0) { }
+		ArchiveFileEntry(const std::wstring& path) :
+			path(path),
+			compressionType(CT_NONE), 
+			sizeFull(0), sizeStored(0), offsetPos(0), 
+			keyBase(0), keyStep(0) { }
+
+		std::wstring fullPath;	// Without module dir
 
 		const size_t GetRecordSize() {
 			return (path.size() * sizeof(wchar_t) + sizeof(uint32_t)	//string + length
@@ -58,19 +66,17 @@ namespace gstd {
 	//*******************************************************************
 	//FileArchiver
 	//*******************************************************************
-	class WStatusBar;
-	class WProgressBar;
 	class FileArchiver {
 	public:
 		using CbSetStatus = std::function<void(const std::wstring&)>;
 		using CbSetProgress = std::function<void(float)>;
 	private:
-		std::list<shared_ptr<ArchiveFileEntry>> listEntry_;
+		std::list<unique_ptr<ArchiveFileEntry>> listEntry_;
 	public:
 		FileArchiver();
 		virtual ~FileArchiver();
 
-		void AddEntry(shared_ptr<ArchiveFileEntry> entry) { listEntry_.push_back(entry); }
+		void AddEntry(unique_ptr<ArchiveFileEntry>&& entry) { listEntry_.push_back(MOVE(entry)); }
 		bool CreateArchiveFile(const std::wstring& baseDir, const std::wstring& pathArchive, 
 			CbSetStatus cbStatus, CbSetProgress cbProgress);
 
@@ -82,10 +88,6 @@ namespace gstd {
 	//ArchiveFile
 	//*******************************************************************
 	class ArchiveFile {
-	public:
-		using EntryMap = std::multimap<std::wstring, ArchiveFileEntry>;
-		using EntryMapIterator = EntryMap::iterator;
-	private:
 		std::wstring basePath_;
 		std::wstring baseDir_;
 
@@ -94,7 +96,7 @@ namespace gstd {
 		uint8_t keyBase_;
 		uint8_t keyStep_;
 
-		EntryMap mapEntry_;
+		std::map<std::wstring, ArchiveFileEntry> mapEntry_;
 	public:
 		ArchiveFile(const std::wstring& path, size_t readOffset);
 		virtual ~ArchiveFile();
@@ -108,42 +110,11 @@ namespace gstd {
 		const std::wstring& GetPath() { return basePath_; }
 		const std::wstring& GetBaseDirectory() { return baseDir_; }
 
-		EntryMap& GetEntryMap() { return mapEntry_; }
+		auto& GetEntryMap() { return mapEntry_; }
 
-		bool IsExists(const std::wstring& name, EntryMapIterator* out = nullptr);
 		std::set<std::wstring> GetFileList();
-		ArchiveFileEntry* GetEntryByPath(const std::wstring& name);
+		optional<ArchiveFileEntry*> GetEntryByPath(const std::wstring& name);
 		
-		static shared_ptr<ByteBuffer> CreateEntryBuffer(ArchiveFileEntry* entry);
-	};
-
-	//*******************************************************************
-	//Compressor
-	//*******************************************************************
-	class Compressor {
-		using in_stream_t = std::basic_istream<char, std::char_traits<char>>;
-		using out_stream_t = std::basic_ostream<char, std::char_traits<char>>;
-		
-		static constexpr const size_t BASIC_CHUNK = (size_t)(1 << 16);
-	public:
-		static bool Deflate(const size_t chunk, 
-			std::function<size_t(char*, size_t, int*)>&& ReadFunction,
-			std::function<void(char*, size_t)>&& WriteFunction,
-			std::function<void(size_t)>&& AdvanceFunction,
-			std::function<bool()>&& CheckFunction,
-			size_t* res);
-		static bool DeflateStream(in_stream_t& bufIn, out_stream_t& bufOut, size_t count, size_t* res);
-		static bool DeflateStream(ByteBuffer& bufIn, out_stream_t& bufOut, size_t count, size_t* res);
-
-		static bool Inflate(const size_t chunk,
-			std::function<size_t(char*, size_t)>&& ReadFunction,
-			std::function<void(char*, size_t)>&& WriteFunction,
-			std::function<void(size_t)>&& AdvanceFunction,
-			std::function<bool()>&& CheckFunction,
-			size_t* res);
-		static bool InflateStream(in_stream_t& bufIn, out_stream_t& bufOut, size_t count, size_t* res);
-		static bool InflateStream(ByteBuffer& bufIn, out_stream_t& bufOut, size_t count, size_t* res);
-		static bool InflateStream(in_stream_t& bufIn, ByteBuffer& bufOut, size_t count, size_t* res);
-		static bool InflateStream(ByteBuffer& bufIn, ByteBuffer& bufOut, size_t count, size_t* res);
+		unique_ptr<ByteBuffer> CreateEntryBuffer(ArchiveFileEntry* entry);
 	};
 }

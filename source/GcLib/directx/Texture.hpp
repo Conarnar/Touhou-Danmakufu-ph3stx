@@ -59,7 +59,6 @@ namespace directx {
 		friend TextureInfoPanel;
 	protected:
 		shared_ptr<TextureData> data_;
-		TextureData* _GetTextureData() { return data_.get(); }
 	public:
 		Texture();
 		Texture(Texture* texture);
@@ -74,7 +73,9 @@ namespace directx {
 		bool CreateRenderTarget(const std::wstring& name, size_t width = 0U, size_t height = 0U);
 		bool CreateFromFileInLoadThread(const std::wstring& path, bool genMipmap, bool flgNonPowerOfTwo, bool bLoadImageInfo = false);
 
+		auto GetTextureData() { return data_; }
 		void SetTexture(IDirect3DTexture9 *pTexture);
+
 		IDirect3DTexture9* GetD3DTexture();
 		IDirect3DSurface9* GetD3DSurface();
 		IDirect3DSurface9* GetD3DZBuffer();
@@ -112,12 +113,7 @@ namespace directx {
 		void __CreateFromFile(shared_ptr<TextureData>& dst, const std::wstring& path, bool genMipmap, bool flgNonPowerOfTwo);
 		bool _CreateFromFile(shared_ptr<TextureData>& dst, const std::wstring& path, bool genMipmap, bool flgNonPowerOfTwo);
 		bool _CreateRenderTarget(shared_ptr<TextureData>& dst, const std::wstring& name, 
-			size_t width = 0U, size_t height = 0U, bool bManaged = true);
-		bool _CreateRenderTarget_Unmanaged(shared_ptr<TextureData>& dst, const std::wstring& name, 
-			size_t width, size_t height)
-		{
-			return _CreateRenderTarget(dst, name, width, height, false);
-		}
+			size_t width = 0U, size_t height = 0U);
 	public:
 		TextureManager();
 		virtual ~TextureManager();
@@ -152,25 +148,36 @@ namespace directx {
 	//****************************************************************************
 	//TextureInfoPanel
 	//****************************************************************************
-	class TextureInfoPanel : public gstd::WindowLogger::Panel {
-	protected:
-		enum {
-			ROW_ADDRESS,
-			ROW_NAME,
-			ROW_FULLNAME,
-			ROW_REFCOUNT,
-			ROW_WIDTH_IMAGE,
-			ROW_HEIGHT_IMAGE,
-			ROW_SIZE,
-		};
-		gstd::WListView wndListView_;
+	class TextureInfoPanel : public gstd::ILoggerPanel {
+		struct TextureDisplay {
+			enum Column {
+				Address,
+				Name, FullPath,
+				Uses, Size,
+				_NoSort,
+			};
 
-		virtual bool _AddedLogger(HWND hTab);
+			uintptr_t address;
+			std::string strAddress;
+			std::string fileName;
+			std::string fullPath;
+			int countRef;
+			uint32_t wd;
+			uint32_t ht;
+			uint32_t size;
+
+			static const ImGuiTableSortSpecs* imguiSortSpecs;
+			static bool IMGUI_CDECL Compare(const TextureDisplay& a, const TextureDisplay& b);
+		};
+	protected:
+		std::vector<TextureDisplay> listDisplay_;
+		uint32_t videoMem_;
 	public:
 		TextureInfoPanel();
-		~TextureInfoPanel();
 
-		virtual void LocateParts();
-		virtual void PanelUpdate();
+		virtual void Initialize(const std::string& name);
+
+		virtual void Update();
+		virtual void ProcessGui();
 	};
 }

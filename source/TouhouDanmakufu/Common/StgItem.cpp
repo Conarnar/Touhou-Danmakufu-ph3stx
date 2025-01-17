@@ -11,7 +11,7 @@
 StgItemManager::StgItemManager(StgStageController* stageController) {
 	stageController_ = stageController;
 
-	listItemData_ = std::make_unique<StgItemDataList>();
+	listItemData_ = make_unique<StgItemDataList>();
 
 	const std::wstring& dir = EPathProperty::GetSystemImageDirectory();
 
@@ -186,8 +186,8 @@ void StgItemManager::Render(int targetPriority) {
 	if (bEnableFog)
 		graphics->SetFogEnable(false);
 
-	ref_count_ptr<DxCamera> camera3D = graphics->GetCamera();
-	ref_count_ptr<DxCamera2D> camera2D = graphics->GetCamera2D();
+	auto& camera3D = graphics->GetCamera();
+	auto& camera2D = graphics->GetCamera2D();
 
 	D3DXMatrixMultiply(&matProj_, &camera2D->GetMatrix(), &graphics->GetViewPortMatrix());
 
@@ -259,22 +259,22 @@ ref_unsync_ptr<StgItemObject> StgItemManager::CreateItem(int type) {
 	switch (type) {
 	case StgItemObject::ITEM_1UP:
 	case StgItemObject::ITEM_1UP_S:
-		res = new StgItemObject_1UP(stageController_);
+		res.reset(new StgItemObject_1UP(stageController_));
 		break;
 	case StgItemObject::ITEM_SPELL:
 	case StgItemObject::ITEM_SPELL_S:
-		res = new StgItemObject_Bomb(stageController_);
+		res.reset(new StgItemObject_Bomb(stageController_));
 		break;
 	case StgItemObject::ITEM_POWER:
 	case StgItemObject::ITEM_POWER_S:
-		res = new StgItemObject_Power(stageController_);
+		res.reset(new StgItemObject_Power(stageController_));
 		break;
 	case StgItemObject::ITEM_POINT:
 	case StgItemObject::ITEM_POINT_S:
-		res = new StgItemObject_Point(stageController_);
+		res.reset(new StgItemObject_Point(stageController_));
 		break;
 	case StgItemObject::ITEM_USER:
-		res = new StgItemObject_User(stageController_);
+		res.reset(new StgItemObject_User(stageController_));
 		break;
 	}
 	res->SetItemType(type);
@@ -291,15 +291,17 @@ void StgItemManager::CancelCollectItems() {
 	bCancelToPlayer_ = true;
 }
 
-std::vector<int> StgItemManager::GetItemIdInCircle(int cx, int cy, int radius, int* itemType) {
-	int rr = radius * radius;
+std::vector<int> StgItemManager::GetItemIdInCircle(int cx, int cy, optional<int> radius, optional<int> itemType) {
+	int r = radius.has_value() ? *radius : 0;
+	int rr = r * r;
 
 	std::vector<int> res;
 	for (ref_unsync_ptr<StgItemObject>& obj : listObj_) {
 		if (obj->IsDeleted()) continue;
-		if (itemType != nullptr && (*itemType != obj->GetItemType())) continue;
+		if (itemType.has_value() && (*itemType != obj->GetItemType())) continue;
 
-		if (Math::HypotSq<int>(cx - obj->GetPositionX(), cy - obj->GetPositionY()) <= rr)
+		bool bInRadius = Math::HypotSq<int>(cx - obj->GetPositionX(), cy - obj->GetPositionY()) <= rr;
+		if (!radius.has_value() || bInRadius)
 			res.push_back(obj->GetObjectID());
 	}
 
@@ -436,7 +438,7 @@ bool StgItemDataList::AddItemDataList(const std::wstring& path, bool bReload) {
 			TextureManager* textureManager = TextureManager::GetBase();
 
 			if ((texture = textureManager->GetTexture(pathImage)) == nullptr) {
-				texture = std::make_shared<Texture>();
+				texture = make_shared<Texture>();
 				if (!texture->CreateFromFile(pathImage, false, false))
 					texture = nullptr;
 			}
@@ -707,7 +709,7 @@ StgItemObject::StgItemObject(StgStageController* stageController) : StgMoveObjec
 	stageController_ = stageController;
 	typeObject_ = TypeObject::Item;
 
-	pattern_ = new StgMovePattern_Item(this);
+	pattern_.reset(new StgMovePattern_Item(this));
 	color_ = D3DCOLOR_ARGB(255, 255, 255, 255);
 
 	typeItem_ = INT_MIN;
@@ -894,7 +896,7 @@ void StgItemObject::_CreateScoreItem() {
 	StgItemManager* itemManager = stageController_->GetItemManager();
 
 	if (itemManager->GetItemCount() < StgItemManager::ITEM_MAX) {
-		ref_unsync_ptr<StgItemObject_ScoreText> obj = new StgItemObject_ScoreText(stageController_);
+		ref_unsync_ptr<StgItemObject_ScoreText> obj(new StgItemObject_ScoreText(stageController_));
 
 		obj->SetX(posX_);
 		obj->SetY(posY_);

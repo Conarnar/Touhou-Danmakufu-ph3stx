@@ -16,7 +16,7 @@ EApplication::~EApplication() {
 }
 
 bool EApplication::_Initialize() {
-	ELogger* logger = ELogger::GetInstance();
+	ELogger* logger = ELogger::CreateInstance();
 	Logger::WriteTop("Initializing application.");
 
 	DnhConfiguration* config = DnhConfiguration::CreateInstance();
@@ -47,6 +47,8 @@ bool EApplication::_Initialize() {
 	graphics->Initialize(appName);
 	ptrGraphics = graphics;
 
+	//logger->ResetDevice();
+
 	HWND hWndDisplay = graphics->GetParentHWND();
 	ErrorDialog::SetParentWindowHandle(hWndDisplay);
 
@@ -72,36 +74,69 @@ bool EApplication::_Initialize() {
 	taskManager->Initialize();
 
 	{
-		logger->EAddPanel(logger->GetInfoPanel(), L"Info", 500);
+		{
+			auto logPanel = logger->GetEventLog();
+			logger->EAddPanelUpdateData(logPanel, 20);
+		}
+		{
+			auto infoPanel = logger->GetInfoPanel();
+			logger->EAddPanelUpdateData(infoPanel, 50);
+		}
 
-		shared_ptr<gstd::TaskInfoPanel> panelTask(new gstd::TaskInfoPanel());
-		//Updated in TaskManager
-		if (logger->AddPanel(panelTask, L"Thread"))
-			taskManager->SetInfoPanel(panelTask);
+		{
+			auto panelSys = make_shared<directx::SystemInfoPanel>();
+			panelSys->SetDisplayName("System");
 
-		shared_ptr<directx::TextureInfoPanel> panelTexture(new directx::TextureInfoPanel());
-		if (logger->EAddPanel(panelTexture, L"Texture", 500))
-			textureManager->SetInfoPanel(panelTexture);
+			if (logger->EAddPanel(panelSys, L"System", 100))
+				graphics->SetSystemPanel(panelSys);
+		}
 
-		shared_ptr<directx::ShaderInfoPanel> panelShader(new directx::ShaderInfoPanel());
-		if (logger->EAddPanel(panelShader, L"Shader", 1000))
-			shaderManager->SetInfoPanel(panelShader);
+		{
+			auto panelTexture = make_shared<directx::TextureInfoPanel>();
+			panelTexture->SetDisplayName("Texture");
 
-		shared_ptr<directx::DxMeshInfoPanel> panelMesh(new directx::DxMeshInfoPanel());
-		if (logger->EAddPanel(panelMesh, L"Mesh", 1000))
-			meshManager->SetInfoPanel(panelMesh);
+			if (logger->EAddPanel(panelTexture, L"Texture", 500))
+				textureManager->SetInfoPanel(panelTexture);
+		}
 
-		shared_ptr<directx::SoundInfoPanel> panelSound(new directx::SoundInfoPanel());
-		//Updated in DirectSoundManager
-		if (logger->AddPanel(panelSound, L"Sound"))
-			soundManager->SetInfoPanel(panelSound);
+		{
+			auto panelShader = make_shared<directx::ShaderInfoPanel>();
+			panelShader->SetDisplayName("Shader");
 
-		shared_ptr<gstd::ScriptCommonDataInfoPanel> panelCommonData = logger->GetScriptCommonDataInfoPanel();
-		//Updated in StgSystem
-		logger->AddPanel(panelCommonData, L"Common Data");
+			if (logger->EAddPanel(panelShader, L"Shader", 1000))
+				shaderManager->SetInfoPanel(panelShader);
+		}
 
-		shared_ptr<ScriptInfoPanel> panelScript(new ScriptInfoPanel());
-		logger->EAddPanel(panelScript, L"Script", 250);
+		{
+			auto panelMesh = make_shared<directx::DxMeshInfoPanel>();
+			panelMesh->SetDisplayName("Mesh");
+
+			if (logger->EAddPanel(panelMesh, L"Mesh", 1000))
+				meshManager->SetInfoPanel(panelMesh);
+		}
+
+		{
+			auto panelSound = make_shared<directx::SoundInfoPanel>();
+			panelSound->SetDisplayName("Sound");
+
+			// Updated in DirectSoundManager
+			if (logger->EAddPanelNoUpdate(panelSound, L"Sound"))
+				soundManager->SetInfoPanel(panelSound);
+		}
+
+		{
+			auto panelCData = make_shared<ScriptCommonDataInfoPanel>();
+			panelCData->SetDisplayName("Common Data");
+
+			logger->EAddPanel(panelCData, L"Common Data", 100);
+		}
+
+		{
+			auto panelScript = make_shared<ScriptInfoPanel>();
+			panelScript->SetDisplayName("Script");
+
+			logger->EAddPanel(panelScript, L"Script", 100);
+		}
 	}
 
 	logger->LoadState();
@@ -164,24 +199,26 @@ bool EApplication::_Loop() {
 			taskManager->SetWorkTime(taskManager->GetTimeSpentOnLastFuncCall());
 
 			if (logger->IsWindowVisible()) {
-				std::wstring fps = StringUtility::Format(L"Logic: %.2ffps, Render: %.2ffps",
-					fpsController->GetCurrentWorkFps(),
-					fpsController->GetCurrentRenderFps());
-				logger->SetInfo(0, L"Fps", fps);
+				if (auto infoLog = logger->GetInfoPanel()) {
+					std::string fps = StringUtility::Format("Logic: %.2ffps, Render: %.2ffps",
+						fpsController->GetCurrentWorkFps(),
+						fpsController->GetCurrentRenderFps());
+					infoLog->SetInfo(0, "Fps", fps);
 
-				{
-					const DirectGraphicsConfig& config = graphics->GetGraphicsConfig();
+					{
+						const DirectGraphicsConfig& config = graphics->GetGraphicsConfig();
 
-					//int widthScreen = widthConfig * graphics->GetScreenWidthRatio();
-					//int heightScreen = heightConfig * graphics->GetScreenHeightRatio();
-					std::wstring screenInfo = StringUtility::Format(L"Width: %d/%d, Height: %d/%d",
-						graphics->GetRenderScreenWidth(), graphics->GetScreenWidth(),
-						graphics->GetRenderScreenHeight(), graphics->GetScreenHeight());
-					logger->SetInfo(1, L"Screen", screenInfo);
+						//int widthScreen = widthConfig * graphics->GetScreenWidthRatio();
+						//int heightScreen = heightConfig * graphics->GetScreenHeightRatio();
+						std::string screenInfo = StringUtility::Format("Width: %d/%d, Height: %d/%d",
+							graphics->GetRenderScreenWidth(), graphics->GetScreenWidth(),
+							graphics->GetRenderScreenHeight(), graphics->GetScreenHeight());
+						infoLog->SetInfo(1, "Screen", screenInfo);
+					}
+
+					infoLog->SetInfo(2, "Font cache",
+						std::to_string(EDxTextRenderer::GetInstance()->GetCacheCount()));
 				}
-
-				logger->SetInfo(2, L"Font cache",
-					StringUtility::Format(L"%d", EDxTextRenderer::GetInstance()->GetCacheCount()));
 			}
 
 			if (count % 120 == 0) {
@@ -370,6 +407,10 @@ bool EApplication::_Finalize() {
 	secondaryBackBuffer_ = nullptr;
 	//EDirectGraphics::GetBase()->ResetDisplaySettings();
 
+	ELogger* logger = ELogger::GetInstance();
+	logger->SaveState();
+	logger->Close();
+
 	SystemController::DeleteInstance();
 	ETaskManager::DeleteInstance();
 	EFileManager::GetInstance()->EndLoadThread();
@@ -382,9 +423,6 @@ bool EApplication::_Finalize() {
 	EDirectGraphics::DeleteInstance();
 	EFpsController::DeleteInstance();
 	EFileManager::DeleteInstance();
-
-	ELogger* logger = ELogger::GetInstance();
-	logger->SaveState();
 
 	Logger::WriteTop("Application finalized.");
 	return true;
@@ -478,7 +516,7 @@ bool EDirectGraphics::Initialize(const std::wstring& windowTitle) {
 		HICON winIcon = ::LoadIconW(Application::GetApplicationHandle(), MAKEINTRESOURCE(IDI_ICON));
 
 		::SetClassLong(hWndDisplay, GCL_HICON, (LONG)winIcon);
-		WindowLogger::InsertOpenCommandInSystemMenu(hWndDisplay);
+		ELogger::GetInstance()->InsertOpenCommandInSystemMenu(hWndDisplay);
 
 		SetWindowTitle(windowTitle);
 
@@ -499,7 +537,7 @@ LRESULT EDirectGraphics::_WindowProcedure(HWND hWnd, UINT uMsg, WPARAM wParam, L
 	case WM_SYSCOMMAND:
 	{
 		int nId = wParam & 0xffff;
-		if (nId == WindowLogger::MENU_ID_OPEN)
+		if (nId == ELogger::MY_SYSCMD_OPEN)
 			ELogger::GetInstance()->ShowLogWindow();
 		break;
 	}
@@ -509,6 +547,6 @@ LRESULT EDirectGraphics::_WindowProcedure(HWND hWnd, UINT uMsg, WPARAM wParam, L
 
 void EDirectGraphics::SetWindowTitle(const std::wstring& title) {
 	HWND hWndDisplay = GetParentHWND();
-	::SetWindowText(hWndDisplay, (title.size() > 0) 
+	::SetWindowTextW(hWndDisplay, (title.size() > 0) 
 		? title.c_str() : defaultWindowTitle_.c_str());
 }

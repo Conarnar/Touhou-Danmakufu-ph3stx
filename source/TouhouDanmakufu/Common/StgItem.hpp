@@ -16,7 +16,6 @@ class StgItemObject;
 //StgItemManager
 //*******************************************************************
 class StgItemManager {
-	friend class StgItemRenderer;
 public:
 	enum {
 		ITEM_MAX = 10000,
@@ -92,7 +91,7 @@ public:
 	void CollectItemsInCircle(const DxCircle& circle);
 	void CancelCollectItems();
 
-	std::vector<int> GetItemIdInCircle(int cx, int cy, int radius, int* itemType);
+	std::vector<int> GetItemIdInCircle(int cx, int cy, optional<int> radius, optional<int> itemType);
 
 	bool IsDefaultBonusItemEnable() { return bDefaultBonusItemEnable_; }
 	void SetDefaultBonusItemEnable(bool bEnable) { bDefaultBonusItemEnable_ = bEnable; }
@@ -180,7 +179,7 @@ public:
 //StgItemObject
 //*******************************************************************
 class StgItemObject : public DxScriptShaderObject, public StgMoveObject, public StgIntersectionObject {
-	friend class StgItemManager;
+	friend StgItemManager;
 public:
 	enum {
 		//Default item IDs

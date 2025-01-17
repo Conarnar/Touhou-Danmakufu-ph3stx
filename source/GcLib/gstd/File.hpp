@@ -6,8 +6,6 @@
 #include "Thread.hpp"
 
 namespace gstd {
-	const std::string HEADER_RECORDFILE = "RecordBufferFile";
-
 	class ByteBuffer;
 	class FileManager;
 	//*******************************************************************
@@ -18,12 +16,14 @@ namespace gstd {
 		virtual ~Writer() {};
 
 		virtual DWORD Write(LPVOID buf, DWORD size) = 0;
+
 		template <typename T> DWORD Write(T& data) {
 			return Write(&data, sizeof(T));
 		}
 		template <typename T> DWORD WriteValue(T data) {
 			return Write(&data, sizeof(T));
 		}
+
 		void WriteBoolean(bool b) { Write(b); }
 		void WriteCharacter(char ch) { Write(ch); }
 		void WriteShort(short num) { Write(num); }
@@ -31,6 +31,11 @@ namespace gstd {
 		void WriteInteger64(int64_t num) { Write(num); }
 		void WriteFloat(float num) { Write(num); }
 		void WriteDouble(double num) { Write(num); }
+
+		template<typename E>
+		void WriteString(std::basic_string<E, std::char_traits<E>, std::allocator<E>> str) {
+			Write(str.data(), str.size() * sizeof(E));
+		}
 	};
 
 	//*******************************************************************
@@ -69,36 +74,28 @@ namespace gstd {
 	//*******************************************************************
 	class ByteBuffer : public Writer, public Reader {
 	protected:
-		size_t reserve_;
-		size_t size_;
+		std::vector<byte> data_;
 		size_t offset_;
-		char* data_;
-
-		size_t _GetReservedSize() { return reserve_; }
 	public:
 		ByteBuffer();
-		ByteBuffer(ByteBuffer& buffer);
-		ByteBuffer(std::stringstream& stream);
-		virtual ~ByteBuffer();
+		ByteBuffer(size_t size);
+		ByteBuffer(std::stringstream& src);
+		virtual ~ByteBuffer() = default;
 
-		void Copy(ByteBuffer& src);
-		void Copy(std::stringstream& src);
 		void Clear();
 
 		void SetSize(size_t size);
 		void Reserve(size_t newReserve);
 
-		size_t GetSize() { return size_; }
-		size_t size() { return size_; }
-		size_t GetOffset() { return offset_; }
+		_NODISCARD size_t GetSize() const { return data_.size(); }
+		_NODISCARD size_t GetOffset() const { return offset_; }
 
 		void Seek(size_t pos);
 		virtual DWORD Write(LPVOID buf, DWORD size);
 		virtual DWORD Read(LPVOID buf, DWORD size);
 
 		_NODISCARD char* GetPointer(size_t offset = 0);
-
-		ByteBuffer& operator=(const ByteBuffer& other) noexcept;
+		_NODISCARD const char* GetPointer(size_t offset = 0) const;
 	};
 
 	//*******************************************************************
@@ -218,12 +215,16 @@ namespace gstd {
 #endif
 
 #if defined(DNH_PROJ_EXECUTOR) || defined(DNH_PROJ_FILEARCHIVER)
-		using PairArchiveEntry = std::pair<ArchiveFileEntry*, shared_ptr<ByteBuffer>>;
+		struct ArchiveEntryStore {
+			ArchiveFile* archive;
+			ArchiveFileEntry* entry;
+			unique_ptr<ByteBuffer> dataBuffer;
+		};
 
-		std::unordered_map<std::wstring, shared_ptr<ArchiveFile>> mapArchiveFile_;
-		std::map<std::wstring, PairArchiveEntry> mapArchiveEntries_;
+		std::unordered_map<std::wstring, unique_ptr<ArchiveFile>> mapArchiveFile_;
+		std::map<std::wstring, ArchiveEntryStore> mapArchiveEntries_;
 
-		shared_ptr<ByteBuffer> _GetByteBuffer(ArchiveFileEntry* entry);
+		ByteBuffer* _GetByteBuffer(ArchiveFileEntry* entry);
 		void _ReleaseByteBuffer(ArchiveFileEntry* entry);
 #endif
 	public:
@@ -244,8 +245,8 @@ namespace gstd {
 		bool AddArchiveFile(const std::wstring& archivePath, size_t readOff);
 		bool RemoveArchiveFile(const std::wstring& archivePath);
 
-		shared_ptr<ArchiveFile> GetArchiveFile(const std::wstring& archivePath);
-		ArchiveFileEntry* GetArchiveFileEntry(const std::wstring& path);
+		ArchiveFile* GetArchiveFile(const std::wstring& archivePath);
+		ArchiveEntryStore* GetArchiveFileEntry(const std::wstring& path);
 
 		std::vector<ArchiveFileEntry*> GetArchiveFilesInDirectory(const std::wstring& dir, bool bSubDirectory);
 		std::set<std::wstring> GetArchiveSubDirectoriesInDirectory(const std::wstring& dir);
@@ -342,7 +343,7 @@ namespace gstd {
 		shared_ptr<File> file_;
 		ArchiveFileEntry* entry_;
 
-		shared_ptr<ByteBuffer> buffer_;
+		ByteBuffer* buffer_;
 		size_t offset_;
 	public:
 		ManagedFileReader(shared_ptr<File> file, ArchiveFileEntry* entry);
@@ -361,27 +362,14 @@ namespace gstd {
 		virtual bool IsArchived();
 		virtual bool IsCompressed();
 
-		virtual shared_ptr<ByteBuffer> GetBuffer() { return buffer_; }
+		virtual ByteBuffer* GetBuffer() { return buffer_; }
 	};
 #endif
 
 	//*******************************************************************
-	//Recordable
-	//*******************************************************************
-	class Recordable;
-	class RecordEntry;
-	class RecordBuffer;
-	class Recordable {
-	public:
-		virtual ~Recordable() {}
-
-		virtual void Read(RecordBuffer& record) = 0;
-		virtual void Write(RecordBuffer& record) = 0;
-	};
-
-	//*******************************************************************
 	//RecordEntry
 	//*******************************************************************
+	class RecordBuffer;
 	class RecordEntry {
 		friend RecordBuffer;
 	private:
@@ -405,55 +393,97 @@ namespace gstd {
 	//*******************************************************************
 	//RecordBuffer
 	//*******************************************************************
-	class RecordBuffer : public Recordable {
+	class RecordBuffer {
+	public:
+		static inline const std::string HEADER = "RecordBufferFile";
 	private:
-		std::unordered_map<std::string, shared_ptr<RecordEntry>> mapEntry_;
+		std::unordered_map<std::string, RecordEntry> mapEntry_;
 	public:
 		RecordBuffer();
 		virtual ~RecordBuffer();
 
 		void Clear();
-		size_t GetEntryCount() { return mapEntry_.size(); }
-		bool IsExists(const std::string& key);
-		std::vector<std::string> GetKeyList();
-		shared_ptr<RecordEntry> GetEntry(const std::string& key);
+
+		size_t GetEntryCount() const { return mapEntry_.size(); }
+		RecordEntry* GetEntry(const std::string& key);
+		const RecordEntry* GetEntry(const std::string& key) const;
+
+		bool IsExists(const std::string& key) const;
+		std::vector<std::string> GetKeyList() const;
 
 		void Write(Writer& writer);
 		void Read(Reader& reader);
-		bool WriteToFile(const std::wstring& path, uint64_t version, const std::string& header) {
+
+		bool WriteToFile(const std::wstring& path, uint32_t version, const char* header, size_t headerSize);
+		bool ReadFromFile(const std::wstring& path, uint32_t version, const char* header, size_t headerSize);
+		bool WriteToFile(const std::wstring& path, uint32_t version, const std::string& header) {
 			return WriteToFile(path, version, header.c_str(), header.size());
 		}
-		bool WriteToFile(const std::wstring& path, uint64_t version, const char* header, size_t headerSize);
-		bool ReadFromFile(const std::wstring& path, uint64_t version, const std::string& header) {
+		bool ReadFromFile(const std::wstring& path, uint32_t version, const std::string& header) {
 			return ReadFromFile(path, version, header.c_str(), header.size());
 		}
-		bool ReadFromFile(const std::wstring& path, uint64_t version, const char* header, size_t headerSize);
 
 		size_t GetEntrySize(const std::string& key);
 
-		//Record get
+		// --------------------------------------------------------------------------------
+		// Record get
+		
 		bool GetRecord(const std::string& key, LPVOID buf, DWORD size);
-		template <typename T> bool GetRecord(const std::string& key, T& data) {
+		template <typename T> inline bool GetRecord(const std::string& key, T& data) {
 			return GetRecord(key, (LPVOID)&data, sizeof(T));
 		}
-		template <typename T> T GetRecordAs(const std::string& key, T def = T()) {
-			T res = def;
-			GetRecord(key, res);
-			return res;
+		template <typename T> inline optional<T> GetRecordAs(const std::string& key) {
+			T res{};
+			if (GetRecord(key, res))
+				return res;
+			return {};
 		}
-		bool GetRecordAsBoolean(const std::string& key, bool def = false) { return GetRecordAs<bool>(key, false); }
-		int GetRecordAsInteger(const std::string& key, int def = 0) { return GetRecordAs<int>(key, 0); }
-		float GetRecordAsFloat(const std::string& key, float def = 0.0f) { return GetRecordAs<float>(key, 0.0f); }
-		double GetRecordAsDouble(const std::string& key, double def = 0.0) { return GetRecordAs<double>(key, 0.0); }
-		std::string GetRecordAsStringA(const std::string& key);
-		std::wstring GetRecordAsStringW(const std::string& key);
-		bool GetRecordAsRecordBuffer(const std::string& key, RecordBuffer& record);
+		template <typename T> inline T GetRecordOr(const std::string& key, T def) {
+			GetRecord(key, def);
+			return MOVE(def);
+		}
 
-		//Record set
+		// --------------------------------------------------------------------------------
+
+		inline optional<bool> GetRecordAsBoolean(const std::string& key) { return GetRecordAs<bool>(key); }
+		inline optional<int> GetRecordAsInteger(const std::string& key) { return GetRecordAs<int>(key); }
+		inline optional<float> GetRecordAsFloat(const std::string& key) { return GetRecordAs<float>(key); }
+		inline optional<double> GetRecordAsDouble(const std::string& key) { return GetRecordAs<double>(key); }
+
+		inline bool GetRecordAsBoolean(const std::string& key, bool def) { return GetRecordOr(key, def); }
+		inline int GetRecordAsInteger(const std::string& key, int def) { return GetRecordOr(key, def); }
+		inline float GetRecordAsFloat(const std::string& key, float def) { return GetRecordOr(key, def); }
+		inline double GetRecordAsDouble(const std::string& key, double def) { return GetRecordOr(key, def); }
+
+		optional<std::string> GetRecordAsStringA(const std::string& key);
+		inline std::string GetRecordAsStringA(const std::string& key, std::string def) {
+			if (auto res = GetRecordAsStringA(key))
+				return *res;
+			return MOVE(def);
+		}
+
+		inline optional<std::wstring> GetRecordAsStringW(const std::string& key) {
+			if (auto res = GetRecordAsStringA(key))
+				return STR_WIDE(*res);
+			return {};
+		}
+		inline std::wstring GetRecordAsStringW(const std::string& key, std::wstring def) {
+			if (auto res = GetRecordAsStringW(key))
+				return *res;
+			return MOVE(def);
+		}
+
+		optional<RecordBuffer> GetRecordAsRecordBuffer(const std::string& key);
+		optional<ByteBuffer> GetRecordAsByteBuffer(const std::string& key);
+
+		// --------------------------------------------------------------------------------
+		// Record set
+
 		void SetRecord(const std::string& key, LPVOID buf, DWORD size);
 		template <typename T> void SetRecord(const std::string& key, const T& data) {
 			SetRecord(key, (LPVOID)&data, sizeof(T));
 		}
+
 		void SetRecordAsBoolean(const std::string& key, bool data) { SetRecord(key, data); }
 		void SetRecordAsInteger(const std::string& key, int data) { SetRecord(key, data); }
 		void SetRecordAsFloat(const std::string& key, float data) { SetRecord(key, data); }
@@ -465,11 +495,9 @@ namespace gstd {
 			std::string mbstr = StringUtility::ConvertWideToMulti(data);
 			SetRecord(key, (LPVOID)mbstr.c_str(), mbstr.size() * sizeof(char));
 		}
-		void SetRecordAsRecordBuffer(const std::string& key, RecordBuffer& record);
 
-		//Recordable
-		virtual void Read(RecordBuffer& record);
-		virtual void Write(RecordBuffer& record);
+		void SetRecordAsRecordBuffer(const std::string& key, RecordBuffer& record);
+		void SetRecordAsByteBuffer(const std::string& key, ByteBuffer&& buffer);
 	};
 
 	//*******************************************************************
@@ -505,7 +533,7 @@ namespace gstd {
 	private:
 		static SystemValueManager* thisBase_;
 	protected:
-		std::map<std::string, shared_ptr<RecordBuffer>> mapRecord_;
+		std::map<std::string, unique_ptr<RecordBuffer>> mapRecord_;
 	public:
 		SystemValueManager();
 		virtual ~SystemValueManager();
@@ -515,9 +543,11 @@ namespace gstd {
 		virtual bool Initialize();
 
 		virtual void ClearRecordBuffer(const std::string& key);
-		bool IsExists(const std::string& key);
-		bool IsExists(const std::string& keyRecord, const std::string& keyValue);
-		shared_ptr<RecordBuffer> GetRecordBuffer(const std::string& key);
+
+		bool IsExists(const std::string& key) const;
+		bool IsExists(const std::string& keyRecord, const std::string& keyValue) const;
+
+		const RecordBuffer* GetRecordBuffer(const std::string& key) const;
 	};
 #endif
 }
