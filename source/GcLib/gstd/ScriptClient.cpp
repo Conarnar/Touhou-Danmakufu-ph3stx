@@ -11,6 +11,7 @@ using namespace gstd;
 //****************************************************************************
 ScriptEngineData::ScriptEngineData() {
 	encoding_ = Encoding::UNKNOWN;
+	refCount_ = 0;
 }
 ScriptEngineData::~ScriptEngineData() {}
 void ScriptEngineData::SetSource(std::vector<char>& source) {
@@ -31,10 +32,12 @@ ScriptEngineData* ScriptEngineCache::AddCache(const std::wstring& name, uptr<Scr
 	auto& res = (cache_[name] = MOVE(data));
 	return res.get();
 }
-void ScriptEngineCache::RemoveCache(const std::wstring& name) {
+bool ScriptEngineCache::RemoveCache(const std::wstring& name) {
 	auto itrFind = cache_.find(name);
-	if (cache_.find(name) != cache_.end())
-		cache_.erase(itrFind);
+	if (cache_.find(name) == cache_.end() || itrFind->second->RefCount() > 0)
+		return false;
+	cache_.erase(itrFind);
+	return true;
 }
 ScriptEngineData* ScriptEngineCache::GetCache(const std::wstring& name) {
 	auto itrFind = cache_.find(name);
@@ -279,6 +282,8 @@ ScriptClientBase::ScriptClientBase() {
 	Reset();
 }
 ScriptClientBase::~ScriptClientBase() {
+	if (engineData_)
+		engineData_->RemoveRef();
 }
 
 void ScriptClientBase::_AddFunction(const char* name, dnh_func_callback_t f, size_t arguments) {
@@ -360,19 +365,22 @@ bool ScriptClientBase::_CreateEngine() {
 	engineData_->SetEngine(std::move(engine));
 	return !engineData_->GetEngine()->get_error();
 }
-bool ScriptClientBase::SetSourceFromFile(std::wstring path) {
-	path = PathProperty::GetUnique(path);
+void ScriptClientBase::SetPath(const std::wstring& path) {
+	std::wstring fixedPath = PathProperty::GetUnique(path);
 
-	if (auto pFindCache = cache_->GetCache(path)) {
+	if (auto pFindCache = cache_->GetCache(fixedPath)) {
 		engineData_ = pFindCache;
-		return true;
+		return;
 	}
 
 	// Script not found in cache, create a new entry
 
-	engineData_ = cache_->AddCache(path, make_unique<ScriptEngineData>());
-	engineData_->SetPath(path);
-	
+	engineData_ = cache_->AddCache(fixedPath, make_unique<ScriptEngineData>());
+	engineData_->SetPath(fixedPath);
+	engineData_->AddRef();
+}
+bool ScriptClientBase::LoadSourceFromFile() {
+	std::wstring& path = GetPath();
 	shared_ptr<FileReader> reader = FileManager::GetBase()->GetFileReader(path);
 	if (reader == nullptr || !reader->Open())
 		throw gstd::wexception(L"SetScriptFileSource: " + ErrorUtility::GetFileNotFoundErrorMessage(path, true));

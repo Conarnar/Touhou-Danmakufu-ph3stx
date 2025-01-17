@@ -233,7 +233,8 @@ int64_t ScriptManager::_LoadScript(const std::wstring& path, shared_ptr<ManagedS
 
 	script->bBeginLoad_ = true;
 
-	script->SetSourceFromFile(path);
+	script->SetPath(path);
+	script->LoadSourceFromFile();
 	script->Compile();
 
 	std::map<std::string, script_block*>::iterator itrEvent;
@@ -520,9 +521,9 @@ gstd::value ManagedScript::Func_UnloadScriptFromCache(gstd::script_machine* mach
 	ManagedScript* script = (ManagedScript*)machine->data;
 
 	auto cache = script->GetScriptEngineCache();
-	cache->RemoveCache(argv[0].as_string());
+	bool res = cache->RemoveCache(argv[0].as_string());
 
-	return value();
+	return script->CreateBooleanValue(res);
 }
 gstd::value ManagedScript::Func_StartScript(gstd::script_machine* machine, int argc, const gstd::value* argv) {
 	ManagedScript* script = (ManagedScript*)machine->data;

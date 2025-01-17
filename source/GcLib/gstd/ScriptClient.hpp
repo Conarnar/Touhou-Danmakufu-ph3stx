@@ -48,9 +48,14 @@ namespace gstd {
 
 		unique_ptr<script_engine> engine_;
 		ScriptFileLineMap mapLine_;
+		int refCount_;
 	public:
 		ScriptEngineData();
 		virtual ~ScriptEngineData();
+
+		void AddRef() { refCount_++; }
+		void RemoveRef() { refCount_--; }
+		int RefCount() { return refCount_; }
 
 		void SetPath(const std::wstring& path) { path_ = path; }
 		std::wstring& GetPath() { return path_; }
@@ -77,7 +82,7 @@ namespace gstd {
 		void Clear();
 
 		ScriptEngineData* AddCache(const std::wstring& name, uptr<ScriptEngineData>&& data);
-		void RemoveCache(const std::wstring& name);
+		bool RemoveCache(const std::wstring& name);
 		ScriptEngineData* GetCache(const std::wstring& name);
 
 		const std::map<std::wstring, uptr<ScriptEngineData>>& GetMap() { return cache_; }
@@ -147,12 +152,12 @@ namespace gstd {
 
 		shared_ptr<RandProvider> GetRand() { return mt_; }
 
-		virtual bool SetSourceFromFile(std::wstring path);
+		void SetPath(const std::wstring& path);
+		virtual bool LoadSourceFromFile();
 		virtual void SetSource(std::vector<char>& source);
 		virtual void SetSource(const std::string& source);
 
 		std::wstring& GetPath() { return engineData_->GetPath(); }
-		void SetPath(const std::wstring& path) { engineData_->SetPath(path); }
 
 		virtual void Compile();
 		virtual void Reset();
